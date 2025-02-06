@@ -170,3 +170,5 @@ server/core.*
 
 # ignore .gitkeep
 !.gitkeep
+client/public/assets/images/channel-logo-sprite.webp
+client/src/styles/channel-logo.css
