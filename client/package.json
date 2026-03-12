@@ -1,6 +1,6 @@
 {
     "name": "KonomiTV",
-    "version": "0.13.0",
+    "version": "0.13.1-mirakurun",
     "private": true,
     "scripts": {
         "akebi": "run-script-os",

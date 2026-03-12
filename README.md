@@ -1,8 +1,8 @@
 # 本フォクについて
 
-このフォクは [本家 KonomiTV](https://github.com/tsukumijima/KonomiTV)　と　[ichigomoti](https://github.com/ichigomoti)　をベースに、[EPGStation](https://github.com/l3tnun/EPGStation)　様のMirakurunに使用していた録画ロジックをKononiTVに追加しました。
+このフォクは [本家 KonomiTV](https://github.com/tsukumijima/KonomiTV)　と　[ichigomoti](https://github.com/ichigomoti)　をベースに、l3tnun様　の[EPGStation](https://github.com/l3tnun/EPGStation)　使用しのMirakurun録画ロジックをKononiTVに追加しました。
 
-ほとんどClaude Codeに作らせています、そのためバグも多くあります。インストールされる際はバックアップを取ることを強く推奨します。
+ほとんどClaude Codeに作らせています(このREADME.mdも)、そのためバグも多くあります。インストールされる際はバックアップを取ることを強く推奨します。
 
 なの、問題が発生しましたら、issueを呈してください。
 
@@ -104,6 +104,7 @@ docker compose -f docker-compose.check.yaml run --rm check
 | `client/src/components/Navigation.vue` | 予約メニュー項目の追加 |
 | `client/src/stores/VersionStore.ts` | バージョン情報ストアの更新 |
 
+</details>
  ---
 # KonomiTV Custom Fork
 
