@@ -77,6 +77,11 @@ const router = createRouter({
             component: () => import('@/views/Reservations/Reservations.vue'),
         },
         {
+            path: '/reservations/conditions',
+            name: 'Reservation Conditions',
+            component: () => import('@/views/Reservations/ReservationConditions.vue'),
+        },
+        {
             path: '/captures/',
             name: 'Captures',
             component: () => import('@/views/Captures.vue'),

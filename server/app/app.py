@@ -22,6 +22,8 @@ from app.constants import (
 from app.metadata.RecordedScanTask import RecordedScanTask
 from app.models.Channel import Channel
 from app.models.Program import Program
+from app.recording.MirakurunRecordingTask import MirakurunRecordingTask
+from app.recording.MirakurunRuleMatchTask import MirakurunRuleMatchTask
 from app.routers import (
     CapturesRouter,
     ChannelsRouter,
@@ -217,9 +219,11 @@ tortoise.contrib.fastapi.register_tortoise(
 
 # サーバーの起動時に実行する
 recorded_scan_task: RecordedScanTask | None = None
+mirakurun_recording_task: MirakurunRecordingTask | None = None
+mirakurun_rule_match_task: MirakurunRuleMatchTask | None = None
 @app.on_event('startup')
 async def Startup():
-    global recorded_scan_task
+    global recorded_scan_task, mirakurun_recording_task, mirakurun_rule_match_task
 
     # チャンネル情報を更新
     await Channel.update()
@@ -240,6 +244,13 @@ async def Startup():
     # ref: https://docs.astral.sh/ruff/rules/asyncio-dangling-task/
     recorded_scan_task = RecordedScanTask()
     await recorded_scan_task.start()
+
+    # Mirakurun バックエンド利用時のみ録画予約スケジューラーとキーワード自動予約ルールマッチタスクを起動する
+    if CONFIG.general.backend == 'Mirakurun':
+        mirakurun_recording_task = MirakurunRecordingTask()
+        await mirakurun_recording_task.start()
+        mirakurun_rule_match_task = MirakurunRuleMatchTask()
+        await mirakurun_rule_match_task.start()
 
 # サーバー設定で指定された時間 (デフォルト: 15分) ごとに1回、チャンネル情報と番組情報を更新する
 # チャンネル情報は頻繁に変わるわけではないけど、手動で再起動しなくても自動で変更が適用されてほしい
@@ -281,10 +292,20 @@ async def Shutdown():
         await EDCBTuner.closeAll()
 
     # 録画フォルダ監視タスクを停止
-    global recorded_scan_task
+    global recorded_scan_task, mirakurun_recording_task, mirakurun_rule_match_task
     if recorded_scan_task is not None:
         await recorded_scan_task.stop()
         recorded_scan_task = None
+
+    # Mirakurun 録画予約スケジューラーを停止 (起動していた場合のみ)
+    if mirakurun_recording_task is not None:
+        await mirakurun_recording_task.stop()
+        mirakurun_recording_task = None
+
+    # Mirakurun キーワード自動予約ルールマッチタスクを停止 (起動していた場合のみ)
+    if mirakurun_rule_match_task is not None:
+        await mirakurun_rule_match_task.stop()
+        mirakurun_rule_match_task = None
 
 # shutdown イベントが発火しない場合も想定し、アプリケーションの終了時に Shutdown() が確実に呼ばれるように
 # atexit は同期関数しか実行できないので、asyncio.run() でくるむ

@@ -8,7 +8,15 @@
             </span>
         </div>
 
-        <!-- 録画設定プリセット選択（プリセットが2つ以上ある場合のみ表示） -->
+        <!-- Mirakurun バックエンド利用中の注意書き -->
+        <div v-if="versionStore.is_mirakurun_backend" class="recording-warning-banner recording-warning-banner--info">
+            <Icon icon="fluent:info-16-filled" class="recording-warning-banner__icon" style="color: rgb(var(--v-theme-primary));" />
+            <span class="recording-warning-banner__text" style="color: rgb(var(--v-theme-primary-lighten-1));">
+                Mirakurun バックエンドでは、録画フォルダ・録画マージン・優先度のみ設定できます。
+            </span>
+        </div>
+
+        <!-- 録画設定プリセット選択（プリセットが2つ以上ある場合のみ表示・EDCB バックエンドのみ） -->
         <div v-if="presets !== null && presets.presets.length >= 2" class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__label">録画設定プリセット</div>
             <div class="reservation-recording-settings__description">
@@ -28,8 +36,8 @@
             </v-select>
         </div>
 
-        <!-- 録画予約の有効/無効 -->
-        <div class="reservation-recording-settings__section">
+        <!-- 録画予約の有効/無効 (EDCB バックエンドのみ) -->
+        <div v-if="!versionStore.is_mirakurun_backend" class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__header">
                 <div class="reservation-recording-settings__label">録画予約の有効/無効</div>
                 <v-switch
@@ -89,8 +97,8 @@
             </v-text-field>
         </div>
 
-        <!-- 録画ファイル名テンプレート -->
-        <div class="reservation-recording-settings__section">
+        <!-- 録画ファイル名テンプレート (EDCB バックエンドのみ) -->
+        <div v-if="!versionStore.is_mirakurun_backend" class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__label">録画ファイル名テンプレート (マクロ)</div>
             <div class="reservation-recording-settings__description">
                 空欄にすると、デフォルトの録画ファイル名テンプレート (マクロ) が録画ファイル名の変更に利用されます。<br>
@@ -161,8 +169,8 @@
             </div>
         </div>
 
-        <!-- 字幕データ録画設定 -->
-        <div class="reservation-recording-settings__section">
+        <!-- 字幕データ録画設定 (EDCB バックエンドのみ) -->
+        <div v-if="!versionStore.is_mirakurun_backend" class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__label">字幕データ録画設定</div>
             <div class="reservation-recording-settings__description">
                 字幕データはほとんど録画容量を消費しません。<br>
@@ -180,8 +188,8 @@
             </v-select>
         </div>
 
-        <!-- データ放送録画設定 -->
-        <div class="reservation-recording-settings__section">
+        <!-- データ放送録画設定 (EDCB バックエンドのみ) -->
+        <div v-if="!versionStore.is_mirakurun_backend" class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__label">データ放送録画設定</div>
             <div class="reservation-recording-settings__description">
                 データ放送は30分で 500MB 以上録画容量を消費する上、KonomiTV は録画再生時のデータ放送表示に非対応です。<br>
@@ -199,8 +207,8 @@
             </v-select>
         </div>
 
-        <!-- 録画後動作設定 -->
-        <div class="reservation-recording-settings__section">
+        <!-- 録画後動作設定 (EDCB バックエンドのみ) -->
+        <div v-if="!versionStore.is_mirakurun_backend" class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__label">録画後動作設定</div>
             <div class="reservation-recording-settings__description">
                 通常は [何もしない] のままで大丈夫です。録画後に録画 PC をスリープさせておきたい方のみ設定してください。環境によっては復帰できず以降の録画に失敗することがあります。
@@ -217,8 +225,8 @@
             </v-select>
         </div>
 
-        <!-- 録画後実行スクリプトのパス -->
-        <div class="reservation-recording-settings__section">
+        <!-- 録画後実行スクリプトのパス (EDCB バックエンドのみ) -->
+        <div v-if="!versionStore.is_mirakurun_backend" class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__label">録画後実行スクリプトのパス</div>
             <div class="reservation-recording-settings__description">
                 通常は空欄のままで大丈夫です。録画後に指定の {{ versionStore.is_linux_environment ? '.sh / .lua' : '.bat / .ps1 / .lua' }} スクリプトを実行させたい方のみ設定してください。
@@ -545,6 +553,11 @@ onMounted(async () => {
     margin-bottom: 4px;
     background-color: rgb(var(--v-theme-warning-darken-3), 0.5);
     border-radius: 6px;
+
+    // 情報バナー (Mirakurun バックエンド向け)
+    &--info {
+        background-color: rgb(var(--v-theme-primary), 0.12);
+    }
 
     &__icon {
         color: rgb(var(--v-theme-warning));

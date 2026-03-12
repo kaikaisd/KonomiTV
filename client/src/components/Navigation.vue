@@ -76,6 +76,16 @@
                         <Icon class="navigation__link-icon" icon="fluent:settings-20-regular" width="26px" />
                         <span v-if="!iconOnly" class="navigation__link-text">設定</span>
                     </router-link>
+                    <!-- Cloudflare Access のログアウトボタン: CF Access 経由でログインしている場合のみ表示する -->
+                    <!-- /cdn-cgi/access/logout にリダイレクトすることでセッションを終了する -->
+                    <a v-if="isCloudflareAccess" v-ripple class="navigation__link" href="/cdn-cgi/access/logout"
+                        :class="{
+                            'navigation__link--icon-only': iconOnly,
+                        }"
+                        v-ftooltip.right="iconOnly ? 'CF Accessからログアウト' : ''">
+                        <Icon class="navigation__link-icon" icon="fa:sign-out" width="22px" />
+                        <span v-if="!iconOnly" class="navigation__link-text">CF Accessからログアウト</span>
+                    </a>
                     <a v-ripple class="navigation__link" active-class="navigation__link--active"
                         href="https://github.com/tsukumijima/KonomiTV" target="_blank"
                         :class="{
@@ -116,11 +126,27 @@ export default defineComponent({
             default: false,
         },
     },
+    data() {
+        return {
+            // Cloudflare Access 経由でログインしているかどうか
+            // /cdn-cgi/access/get-identity が 200 を返せば CF Access が有効と判断する
+            isCloudflareAccess: false,
+        };
+    },
     computed: {
         ...mapStores(useVersionStore),
     },
     async created() {
         await this.versionStore.fetchServerVersion();
+        // Cloudflare Access が有効かどうかを確認する
+        // CF Access 経由でログインしていれば /cdn-cgi/access/get-identity が 200 を返す
+        // CF Access を使っていない環境では 404 等が返るためフラグは false のままになる
+        try {
+            const response = await fetch('/cdn-cgi/access/get-identity');
+            this.isCloudflareAccess = response.ok;
+        } catch {
+            this.isCloudflareAccess = false;
+        }
     }
 });
 

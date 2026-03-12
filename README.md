@@ -1,3 +1,110 @@
+# 本フォクについて
+
+このフォクは [本家 KonomiTV](https://github.com/tsukumijima/KonomiTV)　と　[ichigomoti](https://github.com/ichigomoti)　をベースに、[EPGStation](https://github.com/l3tnun/EPGStation)　様のMirakurunに使用していた録画ロジックをKononiTVに追加しました。
+
+ほとんどClaude Codeに作らせています、そのためバグも多くあります。インストールされる際はバックアップを取ることを強く推奨します。
+
+なの、問題が発生しましたら、issueを呈してください。
+
+作者の日本語レベルは有限ですので、でくれば英語を説明してください。
+
+何卒宜しくお願い致します。
+
+## 追加機能の概要
+
+### 1. Mirakurun バックエンドでの録画予約
+
+EDCB を使わず、Mirakurun バックエンドのみで録画予約が行えるようになりました。
+
+- **手動予約**: 番組表から番組を選択して録画予約を追加・編集・削除
+- **予約一覧**: 予約済み番組の一覧表示（放送局・開始時刻・優先度・録画マージンを確認可能）
+- **録画設定**: 優先度・録画開始/終了マージンをルールごとに個別設定
+- **録画エンジン**: `server/app/recording/` に Mirakurun 向け録画ロジックを実装
+  - 録画開始・停止・進捗管理をバックグラウンドで処理
+
+### 2. キーワード自動予約（EPG 自動録画ルール）
+
+キーワードや条件を指定して、マッチした番組を自動的に録画予約するルールエンジンを追加しました。
+
+| 機能 | 説明 |
+|------|------|
+| **キーワード検索** | 番組名・説明文へのキーワード一致（正規表現・大小文字区別・タイトルのみ検索に対応） |
+| **除外キーワード** | 指定キーワードを含む番組をルールから除外 |
+| **チャンネルタイプ絞り込み** | 地デジ / BS / CS / CATV / SKY / BS4K から対象タイプを選択 |
+| **ジャンル絞り込み** | ARIB 大分類ジャンルで対象番組を絞り込み（除外モードにも対応） |
+| **曜日・時間帯指定** | 対象曜日と時間帯の範囲でフィルタリング（除外モードにも対応） |
+| **放送種別フィルタ** | 無料放送のみ / 有料放送のみ / すべてから選択 |
+| **番組長フィルタ** | 最短・最長番組長（分単位）で短すぎる/長すぎる番組を除外 |
+| **重複タイトルチェック** | 同タイトルを再録画しないよう、チャンネル単位またはすべてのチャンネルで重複チェック |
+| **プレビュー検索** | 保存前に条件に一致する番組を検索して件数・タイトルを確認 |
+
+### 3. Cloudflare Access ログアウト
+
+ボタンをクリックして、`/cdn-cgi/access/logout` をリクエストする。
+
+### 4. Docker によるコードチェック環境
+
+開発環境の差異（OS・Python バージョン・Node.js バージョン）に関わらず、一貫したコードチェックを実行できる Docker ベースの環境を整備しました。
+
+```bash
+# 初回のみイメージをビルド
+docker compose -f docker-compose.check.yaml build
+
+# Python (ruff + pyright) と TypeScript/Vue (eslint + vue-tsc) を一括チェック
+docker compose -f docker-compose.check.yaml run --rm check
+```
+
+- Python 側: `ruff` によるリントと `pyright` による型チェックを実行
+- TypeScript/Vue 側: `eslint` によるリントと `vue-tsc` による型チェックを実行
+- どちらかが失敗した場合は非ゼロの終了コードで終了し、CI 等でも利用可能
+- ソースコードはホストからマウントされるため、変更後に毎回リビルドする必要はない
+
+## 追加・拡張した API
+
+### 録画予約関連（Mirakurun バックエンド）
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/api/reservations` | 録画予約一覧取得 |
+| POST | `/api/reservations` | 録画予約追加 |
+| PUT | `/api/reservations/{reservation_id}` | 録画予約更新 |
+| DELETE | `/api/reservations/{reservation_id}` | 録画予約削除 |
+| GET | `/api/reservation-conditions` | 自動予約ルール一覧取得 |
+| POST | `/api/reservation-conditions` | 自動予約ルール追加 |
+| PUT | `/api/reservation-conditions/{condition_id}` | 自動予約ルール更新 |
+| DELETE | `/api/reservation-conditions/{condition_id}` | 自動予約ルール削除 |
+| POST | `/api/programs/search` | 番組検索（自動予約プレビュー・EDCB/Mirakurun 共通） |
+
+
+## 変更ファイル一覧
+
+<details>
+<summary>クリックで展開</summary>
+
+### サーバー側 (Python)
+
+| ファイル | 変更内容 |
+|---------|---------|
+| `server/app/migrations/models/10_*.py` | **[新規]** Mirakurun 録画予約 DB マイグレーション |
+| `server/app/models/MirakurunReservation.py` | **[新規]** Mirakurun 録画予約モデル |
+| `server/app/models/MirakurunRecordingRule.py` | **[新規]** キーワード自動予約ルールモデル |
+| `server/app/recording/` | **[新規]** Mirakurun 録画エンジン（予約管理・録画開始/停止） |
+| `server/app/routers/ReservationsRouter.py` | Mirakurun 録画予約 CRUD API の追加 |
+| `server/app/routers/ReservationConditionsRouter.py` | **[新規]** 自動予約ルール CRUD API |
+| `server/app/routers/ProgramsRouter.py` | 番組検索 API に Mirakurun バックエンド対応を追加 |
+
+### クライアント側 (TypeScript / Vue)
+
+| ファイル | 変更内容 |
+|---------|---------|
+| `client/src/components/Reservations/ReservationConditionEditDialog.vue` | **[新規]** キーワード自動予約ルール編集ダイアログ（チャンネル・ジャンル・曜日・プレビュー対応） |
+| `client/src/components/Reservations/ReservationRecordingSettings.vue` | 録画設定コンポーネントの拡張 |
+| `client/src/services/Reservations.ts` | 録画予約 API クライアント |
+| `client/src/services/ReservationConditions.ts` | 自動予約ルール API クライアント |
+| `client/src/components/Navigation.vue` | 予約メニュー項目の追加 |
+| `client/src/stores/VersionStore.ts` | バージョン情報ストアの更新 |
+
+ ---
 # KonomiTV Custom Fork
 
 [本家 KonomiTV](https://github.com/tsukumijima/KonomiTV) をベースに、シリーズ管理機能の大幅拡張・キャプチャギャラリー・ログイン必須設定など、いくつかのカスタム機能を追加したフォークです。

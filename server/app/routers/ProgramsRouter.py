@@ -1,5 +1,6 @@
 
 import json
+import re
 from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal, cast
 
@@ -7,10 +8,12 @@ import ariblib.constants
 from fastapi import APIRouter, Body, Depends, Query
 from pydantic import TypeAdapter
 from tortoise import connections
+from tortoise.expressions import Q
 
 from app import logging, schemas
 from app.config import Config
 from app.constants import JST
+from app.models.Program import Program as ProgramModel
 from app.routers.ReservationConditionsRouter import EncodeEDCBSearchKeyInfo
 from app.routers.ReservationsRouter import GetCtrlCmdUtil
 from app.utils import NormalizeToJSTDatetime, ParseDatetimeStringToJST
@@ -202,11 +205,147 @@ def DecodeEDCBEventInfo(event_info: EventInfo) -> schemas.Program:
 )
 async def ProgramSearchAPI(
     program_search_condition: Annotated[schemas.ProgramSearchCondition, Body(description='番組検索条件。')],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetCtrlCmdUtil)],
 ):
     """
     番組情報を検索する。
     """
+
+    # Mirakurun バックエンドの場合: ローカル DB に保存されている番組情報を検索する
+    if Config().general.backend == 'Mirakurun':
+
+        now = datetime.now(tz=JST)
+        kw = program_search_condition.keyword
+
+        # DB レベルでフィルタリングできる条件を適用 (未来の番組のみ対象)
+        query = ProgramModel.filter(start_time__gte=now)
+
+        # キーワード検索 (正規表現以外は DB レベルで処理)
+        if kw and not program_search_condition.is_regex_search_enabled:
+            if program_search_condition.is_title_only:
+                if program_search_condition.is_case_sensitive:
+                    query = query.filter(title__contains=kw)
+                else:
+                    query = query.filter(title__icontains=kw)
+            else:
+                if program_search_condition.is_case_sensitive:
+                    query = query.filter(Q(title__contains=kw) | Q(description__contains=kw))
+                else:
+                    query = query.filter(Q(title__icontains=kw) | Q(description__icontains=kw))
+
+        # 放送種別フィルタ
+        if program_search_condition.broadcast_type == 'FreeOnly':
+            query = query.filter(is_free=True)
+        elif program_search_condition.broadcast_type == 'PaidOnly':
+            query = query.filter(is_free=False)
+
+        # 番組長フィルタ (DB の duration は秒単位、入力は分単位)
+        if program_search_condition.duration_range_min is not None:
+            query = query.filter(duration__gte=program_search_condition.duration_range_min * 60)
+        if program_search_condition.duration_range_max is not None:
+            query = query.filter(duration__lte=program_search_condition.duration_range_max * 60)
+
+        # サービス範囲フィルタ (network_id + service_id の組み合わせ)
+        if program_search_condition.service_ranges:
+            service_filter = Q()
+            for sr in program_search_condition.service_ranges:
+                service_filter |= Q(network_id=sr.network_id, service_id=sr.service_id)
+            query = query.filter(service_filter)
+
+        # 最大 500 件を開始時刻順に取得 (Python レベルのフィルタリング前の上限)
+        programs_db = await query.order_by('start_time').limit(500)
+
+        # Python レベルのフィルタリング (ジャンル・日時帯・正規表現・除外キーワード)
+        result_programs: list[schemas.Program] = []
+        for prog in programs_db:
+
+            # 正規表現キーワード検索
+            if kw and program_search_condition.is_regex_search_enabled:
+                try:
+                    flags = 0 if program_search_condition.is_case_sensitive else re.IGNORECASE
+                    pattern = re.compile(kw, flags)
+                    targets = [prog.title] if program_search_condition.is_title_only else [prog.title, prog.description]
+                    if not any(pattern.search(t) for t in targets):
+                        continue
+                except re.error:
+                    continue
+
+            # 除外キーワードフィルタ
+            excl = program_search_condition.exclude_keyword
+            if excl:
+                targets = [prog.title] if program_search_condition.is_title_only else [prog.title, prog.description]
+                if program_search_condition.is_case_sensitive:
+                    if any(excl in t for t in targets):
+                        continue
+                else:
+                    excl_lower = excl.lower()
+                    if any(excl_lower in t.lower() for t in targets):
+                        continue
+
+            # ジャンルフィルタ (genres は JSON 配列: [{major: str, middle: str}, ...])
+            if program_search_condition.genre_ranges:
+                prog_majors = {g['major'] for g in prog.genres}
+                filter_majors = {gr['major'] for gr in program_search_condition.genre_ranges if gr['major']}
+                matches_genre = bool(prog_majors & filter_majors)
+                if program_search_condition.is_exclude_genre_ranges:
+                    if matches_genre:
+                        continue
+                else:
+                    if not matches_genre:
+                        continue
+
+            # 日時帯フィルタ (date_ranges で指定された曜日・時間帯に一致するか)
+            if program_search_condition.date_ranges:
+                prog_jst = prog.start_time.astimezone(JST)
+                # Python weekday(): 0=月, 1=火, ..., 6=日 → EDCB/KonomiTV 規約: 0=日, 1=月, ..., 6=土
+                edcb_weekday = (prog_jst.weekday() + 1) % 7
+                prog_mins = prog_jst.hour * 60 + prog_jst.minute
+                matches_date = False
+                for dr in program_search_condition.date_ranges:
+                    if dr.start_day_of_week == edcb_weekday:
+                        start_mins = dr.start_hour * 60 + dr.start_minute
+                        # 終了時刻が 00:00 (0 分) の場合は翌日の 00:00 (1440 分 = 24h) として扱う
+                        end_mins = dr.end_hour * 60 + dr.end_minute or 1440
+                        if start_mins <= prog_mins < end_mins:
+                            matches_date = True
+                            break
+                if program_search_condition.is_exclude_date_ranges:
+                    if matches_date:
+                        continue
+                else:
+                    if not matches_date:
+                        continue
+
+            # schemas.Program オブジェクトに変換して結果リストに追加
+            result_programs.append(schemas.Program(
+                id=prog.id,
+                channel_id=prog.channel_id,
+                network_id=prog.network_id,
+                service_id=prog.service_id,
+                event_id=prog.event_id,
+                title=prog.title,
+                description=prog.description,
+                detail=prog.detail,
+                start_time=prog.start_time,
+                end_time=prog.end_time,
+                duration=prog.duration,
+                is_free=prog.is_free,
+                genres=prog.genres,
+                video_type=prog.video_type,
+                video_codec=prog.video_codec,
+                video_resolution=prog.video_resolution,
+                primary_audio_type=prog.primary_audio_type,
+                primary_audio_language=prog.primary_audio_language,
+                primary_audio_sampling_rate=prog.primary_audio_sampling_rate,
+                secondary_audio_type=prog.secondary_audio_type,
+                secondary_audio_language=prog.secondary_audio_language,
+                secondary_audio_sampling_rate=prog.secondary_audio_sampling_rate,
+            ))
+
+        return schemas.Programs(total=len(result_programs), programs=result_programs)
+
+    # EDCB バックエンドの場合: EDCB の EPG ストアから番組情報を検索する
+    assert edcb is not None
 
     # schemas.ProgramSearchCondition オブジェクトを SearchKeyInfo オブジェクトに変換
     search_key_info = await EncodeEDCBSearchKeyInfo(program_search_condition, edcb)
@@ -500,6 +639,40 @@ async def TimeTableAPI(
         except Exception as ex:
             # 予約情報の取得に失敗しても番組表自体は返す
             logging.warning('[ProgramsRouter][TimeTableAPI] Failed to get reservations:', exc_info=ex)
+
+    elif Config().general.backend == 'Mirakurun':
+        # Mirakurun バックエンドの場合は自前の DB から予約情報を取得
+        try:
+            from app.models.MirakurunReservation import MirakurunReservation
+            active_reservations = await MirakurunReservation.filter(
+                status__in=['Pending', 'Recording'],
+            ).all()
+            for reservation in active_reservations:
+                # 番組 ID を構築 (EDCB の program_id 形式と同一)
+                program_id = f'NID{reservation.network_id}-SID{reservation.service_id:03d}-EID{reservation.event_id}'
+                status_val: Literal['Reserved', 'Recording', 'Disabled'] = (
+                    'Recording' if reservation.status == 'Recording' else 'Reserved'
+                )
+                reservations_by_program_id[program_id] = {
+                    'id': reservation.id,
+                    'status': status_val,
+                    'recording_availability': 'Full',
+                }
+                # channel_id ベースのフォールバック辞書も更新
+                # EID が番組表上のものと一致しない場合でも、同一チャンネルかつ同一時間帯で紐付けられるようにする
+                if reservation.channel_id is not None:
+                    reserve_start_time = NormalizeToJSTDatetime(reservation.start_time)
+                    reserve_end_time = NormalizeToJSTDatetime(reservation.end_time)
+                    if reservation.channel_id not in reservations_by_channel_time:
+                        reservations_by_channel_time[reservation.channel_id] = []
+                    reservations_by_channel_time[reservation.channel_id].append({
+                        'start_time': reserve_start_time,
+                        'end_time': reserve_end_time,
+                        'reservation': reservations_by_program_id[program_id],
+                    })
+        except Exception as ex:
+            # 予約情報の取得に失敗しても番組表自体は返す
+            logging.warning('[ProgramsRouter][TimeTableAPI] Failed to get Mirakurun reservations:', exc_info=ex)
 
     # チャンネルごとに番組をグループ化
     programs_by_channel: dict[str, list[dict[str, Any]]] = {c['id']: [] for c in channels_result}

@@ -52,9 +52,6 @@ class ReservationConditions {
 
         if (response.type === 'error') {
             switch (response.data.detail) {
-                case 'This API is only available when the backend is EDCB':
-                    APIClient.showGenericError(response, 'キーワード自動予約機能は EDCB バックエンド選択時のみ利用できます。');
-                    break;
                 case 'Failed to get the list of reserve conditions':
                     APIClient.showGenericError(response, 'キーワード自動予約条件一覧の取得に失敗しました。');
                     break;
@@ -78,9 +75,6 @@ class ReservationConditions {
 
         if (response.type === 'error') {
             switch (response.data.detail) {
-                case 'This API is only available when the backend is EDCB':
-                    APIClient.showGenericError(response, 'キーワード自動予約機能は EDCB バックエンド選択時のみ利用できます。');
-                    break;
                 case 'Specified reservation_condition_id was not found':
                     APIClient.showGenericError(response, '指定されたキーワード自動予約条件が見つかりませんでした。');
                     break;
@@ -110,9 +104,6 @@ class ReservationConditions {
 
         if (response.type === 'error') {
             switch (response.data.detail) {
-                case 'This API is only available when the backend is EDCB':
-                    APIClient.showGenericError(response, 'キーワード自動予約機能は EDCB バックエンド選択時のみ利用できます。');
-                    break;
                 case 'Failed to register the reserve condition':
                     APIClient.showGenericError(response, 'キーワード自動予約条件の登録に失敗しました。');
                     break;
@@ -147,9 +138,6 @@ class ReservationConditions {
 
         if (response.type === 'error') {
             switch (response.data.detail) {
-                case 'This API is only available when the backend is EDCB':
-                    APIClient.showGenericError(response, 'キーワード自動予約機能は EDCB バックエンド選択時のみ利用できます。');
-                    break;
                 case 'Specified reservation_condition_id was not found':
                     APIClient.showGenericError(response, '指定されたキーワード自動予約条件が見つかりませんでした。');
                     break;
@@ -176,9 +164,6 @@ class ReservationConditions {
 
         if (response.type === 'error') {
             switch (response.data.detail) {
-                case 'This API is only available when the backend is EDCB':
-                    APIClient.showGenericError(response, 'キーワード自動予約機能は EDCB バックエンド選択時のみ利用できます。');
-                    break;
                 case 'Specified reservation_condition_id was not found':
                     APIClient.showGenericError(response, '指定されたキーワード自動予約条件が見つかりませんでした。');
                     break;

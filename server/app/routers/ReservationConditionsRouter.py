@@ -1,4 +1,5 @@
 
+import asyncio
 import re
 from typing import Annotated, Any, Literal, cast
 
@@ -6,6 +7,7 @@ import ariblib.constants
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, status
 
 from app import logging, schemas
+from app.config import Config
 from app.routers.ReservationsRouter import (
     DecodeEDCBRecSettingData,
     EncodeEDCBRecSettingData,
@@ -508,13 +510,34 @@ async def GetAutoAddData(
     response_model = schemas.ReservationConditions,
 )
 async def ReservationConditionsAPI(
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetCtrlCmdUtil)],
 ):
     """
     すべてのキーワード自動予約条件 (EPG 予約) の情報を取得する。
     """
 
+    # Mirakurun バックエンドの場合は DB からルールを取得して返す
+    if Config().general.backend == 'Mirakurun':
+        from app.models.MirakurunRecordingRule import MirakurunRecordingRule
+        rules = await MirakurunRecordingRule.all().order_by('id')
+        # 各ルールごとの保留中・録画中の予約数をカウントする
+        reserve_conditions: list[schemas.ReservationCondition] = []
+        for rule in rules:
+            from app.models.MirakurunReservation import MirakurunReservation
+            reservation_count = await MirakurunReservation.filter(
+                comment__contains=f'自動予約ルール ID:{rule.id}',
+                status__in=['Pending', 'Recording'],
+            ).count()
+            reserve_conditions.append(schemas.ReservationCondition(
+                id=rule.id,
+                reservation_count=reservation_count,
+                program_search_condition=rule.getProgramSearchCondition(),
+                record_settings=rule.getRecordSettings(),
+            ))
+        return schemas.ReservationConditions(total=len(reserve_conditions), reservation_conditions=reserve_conditions)
+
     # EDCB から現在のすべてのキーワード自動予約条件の情報を取得
+    assert edcb is not None
     auto_add_data_list: list[AutoAddDataRequired] | None = await edcb.sendEnumAutoAdd()
     if auto_add_data_list is None:
         # None が返ってきた場合は空のリストを返す
@@ -524,12 +547,12 @@ async def ReservationConditionsAPI(
     chset5_services = await GetChSet5Services(edcb)
 
     # EDCB の AutoAddData オブジェクトを schemas.ReservationCondition オブジェクトに変換
-    reserve_conditions = [
+    edcb_conditions = [
         await DecodeEDCBAutoAddData(auto_add_data, edcb, chset5_services)
         for auto_add_data in auto_add_data_list
     ]
 
-    return schemas.ReservationConditions(total=len(reserve_conditions), reservation_conditions=reserve_conditions)
+    return schemas.ReservationConditions(total=len(edcb_conditions), reservation_conditions=edcb_conditions)
 
 
 @router.post(
@@ -539,14 +562,27 @@ async def ReservationConditionsAPI(
 )
 async def RegisterReservationConditionAPI(
     reserve_condition_add_request: Annotated[schemas.ReservationConditionAddRequest, Body(description='登録するキーワード自動予約条件。')],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetCtrlCmdUtil)],
 ):
     """
     キーワード自動予約条件を登録する。
     """
 
+    # Mirakurun バックエンドの場合は DB にルールを保存し、即座にスキャンを実行する
+    if Config().general.backend == 'Mirakurun':
+        from app.models.MirakurunRecordingRule import MirakurunRecordingRule
+        from app.recording.MirakurunRuleMatchTask import MirakurunRuleMatchTask
+        rule = MirakurunRecordingRule()
+        rule.setProgramSearchCondition(reserve_condition_add_request.program_search_condition)
+        rule.setRecordSettings(reserve_condition_add_request.record_settings)
+        await rule.save()
+        # ルール登録直後にスキャンを走らせ、マッチした番組の予約をすぐ生成する
+        asyncio.create_task(MirakurunRuleMatchTask.runNow())  # noqa: RUF006
+        return
+
     # EDCB の AutoAddData オブジェクトを組み立てる
     ## data_id は EDCB 側で自動で割り振られるため省略している
+    assert edcb is not None
     chset5_services = await GetChSet5Services(edcb)
     auto_add_data: AutoAddData = {
         'search_info': cast(SearchKeyInfo, await EncodeEDCBSearchKeyInfo(
@@ -577,14 +613,37 @@ async def RegisterReservationConditionAPI(
     response_model = schemas.ReservationCondition,
 )
 async def ReservationConditionAPI(
-    auto_add_data: Annotated[AutoAddDataRequired, Depends(GetAutoAddData)],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    reservation_condition_id: Annotated[int, Path(description='キーワード自動予約条件 ID 。')],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetCtrlCmdUtil)],
 ):
     """
     指定されたキーワード自動予約条件の情報を取得する。
     """
 
+    # Mirakurun バックエンドの場合は DB からルールを取得して返す
+    if Config().general.backend == 'Mirakurun':
+        from app.models.MirakurunRecordingRule import MirakurunRecordingRule
+        from app.models.MirakurunReservation import MirakurunReservation
+        rule = await MirakurunRecordingRule.get_or_none(id=reservation_condition_id)
+        if rule is None:
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'Specified reservation_condition_id was not found',
+            )
+        reservation_count = await MirakurunReservation.filter(
+            comment__contains=f'自動予約ルール ID:{rule.id}',
+            status__in=['Pending', 'Recording'],
+        ).count()
+        return schemas.ReservationCondition(
+            id=rule.id,
+            reservation_count=reservation_count,
+            program_search_condition=rule.getProgramSearchCondition(),
+            record_settings=rule.getRecordSettings(),
+        )
+
     # EDCB の AutoAddData オブジェクトを schemas.ReservationCondition オブジェクトに変換して返す
+    assert edcb is not None
+    auto_add_data = await GetAutoAddData(reservation_condition_id, edcb)
     chset5_services = await GetChSet5Services(edcb)
     return await DecodeEDCBAutoAddData(auto_add_data, edcb, chset5_services)
 
@@ -596,15 +655,44 @@ async def ReservationConditionAPI(
     response_model = schemas.ReservationCondition,
 )
 async def UpdateReservationConditionAPI(
-    auto_add_data: Annotated[AutoAddDataRequired, Depends(GetAutoAddData)],
+    reservation_condition_id: Annotated[int, Path(description='キーワード自動予約条件 ID 。')],
     reserve_condition_update_request: Annotated[schemas.ReservationConditionUpdateRequest, Body(description='更新するキーワード自動予約条件。')],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetCtrlCmdUtil)],
 ):
     """
     指定されたキーワード自動予約条件を更新する。
     """
 
+    # Mirakurun バックエンドの場合は DB のルールを更新し、即座にスキャンを実行する
+    if Config().general.backend == 'Mirakurun':
+        from app.models.MirakurunRecordingRule import MirakurunRecordingRule
+        from app.models.MirakurunReservation import MirakurunReservation
+        from app.recording.MirakurunRuleMatchTask import MirakurunRuleMatchTask
+        rule = await MirakurunRecordingRule.get_or_none(id=reservation_condition_id)
+        if rule is None:
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'Specified reservation_condition_id was not found',
+            )
+        rule.setProgramSearchCondition(reserve_condition_update_request.program_search_condition)
+        rule.setRecordSettings(reserve_condition_update_request.record_settings)
+        await rule.save()
+        # ルール更新直後にスキャンを走らせ、新しい条件にマッチした番組の予約を再生成する
+        asyncio.create_task(MirakurunRuleMatchTask.runNow())  # noqa: RUF006
+        reservation_count = await MirakurunReservation.filter(
+            comment__contains=f'自動予約ルール ID:{rule.id}',
+            status__in=['Pending', 'Recording'],
+        ).count()
+        return schemas.ReservationCondition(
+            id=rule.id,
+            reservation_count=reservation_count,
+            program_search_condition=rule.getProgramSearchCondition(),
+            record_settings=rule.getRecordSettings(),
+        )
+
     # 現在のキーワード自動予約条件の AutoAddData に新しい検索条件・録画設定を上書きマージする形で EDCB に送信する
+    assert edcb is not None
+    auto_add_data = await GetAutoAddData(reservation_condition_id, edcb)
     chset5_services = await GetChSet5Services(edcb)
     auto_add_data['search_info'] = await EncodeEDCBSearchKeyInfo(
         reserve_condition_update_request.program_search_condition,
@@ -638,16 +726,40 @@ async def UpdateReservationConditionAPI(
     status_code = status.HTTP_204_NO_CONTENT,
 )
 async def DeleteReservationConditionAPI(
-    auto_add_data: Annotated[AutoAddDataRequired, Depends(GetAutoAddData)],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    reservation_condition_id: Annotated[int, Path(description='キーワード自動予約条件 ID 。')],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetCtrlCmdUtil)],
 ):
     """
     指定されたキーワード自動予約条件を削除する。
     """
 
+    # Mirakurun バックエンドの場合は DB からルールを削除し、紐づく保留中予約をキャンセルする
+    if Config().general.backend == 'Mirakurun':
+        from app.models.MirakurunRecordingRule import MirakurunRecordingRule
+        from app.models.MirakurunReservation import MirakurunReservation
+        rule = await MirakurunRecordingRule.get_or_none(id=reservation_condition_id)
+        if rule is None:
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'Specified reservation_condition_id was not found',
+            )
+        # このルールに紐づく保留中の予約をキャンセルする (録画中のものはそのまま続行させる)
+        pending_reservations = await MirakurunReservation.filter(
+            comment__contains=f'自動予約ルール ID:{rule.id}',
+            status='Pending',
+        ).all()
+        for reservation in pending_reservations:
+            reservation.status = 'Cancelled'
+            await reservation.save()
+        # ルール自体を削除する
+        await rule.delete()
+        return
+
     # TODO: キーワード自動予約条件を削除した後に残った予約をクリーンアップする処理を追加する
 
     # EDCB に指定されたキーワード自動予約条件を削除するように指示
+    assert edcb is not None
+    auto_add_data = await GetAutoAddData(reservation_condition_id, edcb)
     result = await edcb.sendDelAutoAdd([auto_add_data['data_id']])
     if result is False:
         # False が返ってきた場合はエラーを返す

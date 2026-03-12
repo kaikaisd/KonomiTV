@@ -512,7 +512,7 @@ async def CaptureFolderCaptureListAPI(
 
     # メタデータを抽出する
     captures: list[schemas.Capture] = []
-    for filename, mtime, filepath in page_files:
+    for _, _, filepath in page_files:
         capture = ExtractCaptureInfo(filepath)
         captures.append(capture)
 

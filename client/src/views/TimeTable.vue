@@ -557,12 +557,6 @@ async function onQuickReserve(programId: string, channel: IChannel, program: ITi
         return;
     }
 
-    // EDCB バックエンドでない場合はエラー
-    if (isEDCBBackend.value === false) {
-        Message.warning('録画予約機能は EDCB バックエンド選択時のみ利用できます。');
-        return;
-    }
-
     // 予約がある場合は有効/無効を切り替え
     if (program.reservation !== null) {
         // 完全な予約情報を取得

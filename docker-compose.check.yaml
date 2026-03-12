@@ -1,0 +1,35 @@
+
+# コードチェック用 Docker Compose ファイル
+# 使い方:
+#   初回ビルド:
+#     docker compose -f docker-compose.check.yaml build
+#
+#   コードチェック実行:
+#     docker compose -f docker-compose.check.yaml run --rm check
+#
+#   ソースコードはホストからマウントされるため、変更後に毎回リビルドする必要はない。
+#   pyproject.toml / poetry.lock / package.json / yarn.lock を変更した場合のみ再ビルドが必要。
+
+services:
+  check:
+    build:
+      context: .
+      dockerfile: Dockerfile.check
+    # ソースコードをホストからマウントする
+    # インストール済みの依存パッケージ (.venv / node_modules) は
+    # 匿名ボリュームでホストマウントを上書きし、イメージ内のものを維持する
+    volumes:
+      # サーバーのソースコードをマウント
+      - type: bind
+        source: ./server
+        target: /code/server
+      # .venv はイメージ内にインストール済みのものを使う (ホスト側の .venv で上書きしない)
+      - type: volume
+        target: /code/server/.venv
+      # クライアントのソースコードをマウント
+      - type: bind
+        source: ./client
+        target: /code/client
+      # node_modules はイメージ内にインストール済みのものを使う
+      - type: volume
+        target: /code/client/node_modules

@@ -10,6 +10,23 @@
                         { name: 'ホーム', path: '/' },
                         { name: '録画予約', path: '/reservations/', disabled: true },
                     ]" />
+                    <!-- 自動予約ルール管理へのリンクカード -->
+                    <v-card class="reservations-home-container__conditions-card mb-5" elevation="1"
+                        @click="$router.push('/reservations/conditions')" style="cursor: pointer;">
+                        <v-card-text class="reservations-home-container__conditions-card-content">
+                            <Icon icon="fluent:tag-20-regular" width="28px"
+                                class="reservations-home-container__conditions-card-icon" />
+                            <div class="reservations-home-container__conditions-card-text">
+                                <div class="reservations-home-container__conditions-card-title">自動予約ルール</div>
+                                <div class="reservations-home-container__conditions-card-sub">
+                                    キーワードを指定して番組を自動的に録画予約するルールを管理します。
+                                </div>
+                            </div>
+                            <Icon icon="fluent:chevron-right-20-regular" width="20px"
+                                class="reservations-home-container__conditions-card-arrow" />
+                        </v-card-text>
+                    </v-card>
+
                     <!-- 放送が近い録画予約セクション -->
                     <ReservationList
                         class="reservations-home-container__upcoming-reservations"
@@ -171,6 +188,43 @@ onUnmounted(() => {
     }
 
 
+
+    &__conditions-card {
+        background: rgb(var(--v-theme-background-lighten-2)) !important;
+
+        &-content {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 14px 16px !important;
+        }
+
+        &-icon {
+            flex-shrink: 0;
+            color: rgb(var(--v-theme-primary));
+        }
+
+        &-text {
+            flex: 1;
+            min-width: 0;
+        }
+
+        &-title {
+            font-size: 0.95rem;
+            font-weight: bold;
+        }
+
+        &-sub {
+            font-size: 0.8rem;
+            color: rgb(var(--v-theme-text-darken-1));
+            margin-top: 2px;
+        }
+
+        &-arrow {
+            flex-shrink: 0;
+            color: rgb(var(--v-theme-text-darken-1));
+        }
+    }
 
     :deep(.reservation-list) {
         & + .reservation-list {

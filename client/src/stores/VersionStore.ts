@@ -54,6 +54,12 @@ const useVersionStore = defineStore('version', {
         is_linux_environment(): boolean {
             const env = this.server_environment;
             return env === 'Linux' || env === 'Linux-Docker' || env === 'Linux-ARM';
+        },
+        server_backend(): 'EDCB' | 'Mirakurun' | null {
+            return this.server_version_info?.backend ?? null;
+        },
+        is_mirakurun_backend(): boolean {
+            return this.server_backend === 'Mirakurun';
         }
     },
     actions: {

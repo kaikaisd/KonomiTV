@@ -47,13 +47,6 @@
                         優先度を上げるか、重複する録画予約を削除してください。
                     </span>
                 </div>
-                <!-- Mirakurun バックエンド時の通知 -->
-                <div v-if="!isEDCBBackend && !isPastProgram && !hasRealReservation" class="status-banner status-banner--info mb-4">
-                    <Icon icon="fluent:info-16-regular" class="status-banner__icon" />
-                    <span class="status-banner__text">
-                        録画予約機能は EDCB バックエンド選択時のみ利用できます。
-                    </span>
-                </div>
                 <!-- 番組情報 -->
                 <ReservationProgramInfo
                     :reservation="reservation"
@@ -88,7 +81,7 @@
                 </v-btn>
                 <!-- mock の予約 (予約なし) の場合: 予約追加ボタン -->
                 <v-btn v-if="showAddButton" class="px-3" color="secondary" variant="flat"
-                    :disabled="!isEDCBBackend" :loading="isAdding" @click="handleAddReservation">
+                    :loading="isAdding" @click="handleAddReservation">
                     <Icon icon="fluent:timer-16-regular" width="20px" height="20px" />
                     <span class="ml-1">予約を追加</span>
                 </v-btn>
@@ -351,12 +344,14 @@ const handleUpdateSettings = (newSettings: IRecordSettings) => {
 const handleSave = async () => {
     if (!hasChanges.value || isSaving.value || !currentSettings.value || !props.reservation) return;
 
-    // バリデーションチェック
-    const captionIsDefault = currentSettings.value.caption_recording_mode === 'Default';
-    const dataBroadcastingIsDefault = currentSettings.value.data_broadcasting_recording_mode === 'Default';
-    if (captionIsDefault !== dataBroadcastingIsDefault) {
-        Message.warning('字幕データ録画設定・データ放送録画設定を明示的に設定する際は、両方とも「デフォルト設定を使う」以外に設定してください。');
-        return;
+    // バリデーションチェック (EDCB バックエンド時のみ; Mirakurun には字幕/データ放送設定がないためスキップ)
+    if (isEDCBBackend.value) {
+        const captionIsDefault = currentSettings.value.caption_recording_mode === 'Default';
+        const dataBroadcastingIsDefault = currentSettings.value.data_broadcasting_recording_mode === 'Default';
+        if (captionIsDefault !== dataBroadcastingIsDefault) {
+            Message.warning('字幕データ録画設定・データ放送録画設定を明示的に設定する際は、両方とも「デフォルト設定を使う」以外に設定してください。');
+            return;
+        }
     }
 
     isSaving.value = true;
@@ -403,22 +398,18 @@ const confirmDelete = async () => {
 const handleAddReservation = async () => {
     if (isAdding.value || !displayProgram.value || !props.reservation) return;
 
-    // EDCB バックエンドでない場合はエラー
-    if (!isEDCBBackend.value) {
-        Message.error('録画予約機能は EDCB バックエンド選択時のみ利用できます。');
-        return;
-    }
-
     isAdding.value = true;
     try {
-        // バリデーションチェック (保存処理と同じ)
+        // バリデーションチェック (EDCB バックエンド時のみ; Mirakurun には字幕/データ放送設定がないためスキップ)
         const recordSettings = currentSettings.value ?? props.reservation.record_settings;
-        const captionIsDefault = recordSettings.caption_recording_mode === 'Default';
-        const dataBroadcastingIsDefault = recordSettings.data_broadcasting_recording_mode === 'Default';
-        if (captionIsDefault !== dataBroadcastingIsDefault) {
-            Message.warning('字幕データ録画設定・データ放送録画設定を明示的に設定する際は、両方とも「デフォルト設定を使う」以外に設定してください。');
-            isAdding.value = false;
-            return;
+        if (isEDCBBackend.value) {
+            const captionIsDefault = recordSettings.caption_recording_mode === 'Default';
+            const dataBroadcastingIsDefault = recordSettings.data_broadcasting_recording_mode === 'Default';
+            if (captionIsDefault !== dataBroadcastingIsDefault) {
+                Message.warning('字幕データ録画設定・データ放送録画設定を明示的に設定する際は、両方とも「デフォルト設定を使う」以外に設定してください。');
+                isAdding.value = false;
+                return;
+            }
         }
 
         // mock の予約に含まれる record_settings を使用

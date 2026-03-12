@@ -1,0 +1,59 @@
+
+# --------------------------------------------------------------------------------------------------------------
+# コードチェック専用コンテナ
+# Python (ruff + pyright) と TypeScript/Vue (eslint + vue-tsc) の両方のリント・型チェックを実行する
+# --------------------------------------------------------------------------------------------------------------
+
+# Node.js 20.16.0 (Debian Bookworm slim) をベースイメージとして利用
+# Python 3.11 は bookworm リポジトリから apt でインストールする
+FROM node:20.16.0-bookworm-slim
+
+# apt-get に対話的に設定確認されないための設定
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Python 3.11 と pip, venv, Poetry の依存パッケージをインストール
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3.11 \
+        python3.11-venv \
+        python3-pip \
+        curl \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+# python3.11 を python3 / python として使えるようにシンボリックリンクを設定
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+
+# Poetry をインストール (公式推奨の方法)
+RUN curl -sSL https://install.python-poetry.org | python3 -
+ENV PATH="/root/.local/bin:$PATH"
+
+# --------------------------------------------------------------------------------------------------------------
+# サーバー側: Poetry の依存パッケージをキャッシュレイヤーとしてインストール
+# --------------------------------------------------------------------------------------------------------------
+WORKDIR /code/server
+
+# 設定ファイルだけを先にコピーして依存パッケージをインストール (ソース変更でキャッシュが無効化されないよう分離)
+COPY server/pyproject.toml server/poetry.lock server/poetry.toml /code/server/
+
+# dev 依存 (ruff, pyright) も含めてインストール, ルートパッケージ自体のインストールはスキップ
+RUN poetry install --with dev --no-root --no-interaction
+
+# --------------------------------------------------------------------------------------------------------------
+# クライアント側: yarn の依存パッケージをキャッシュレイヤーとしてインストール
+# --------------------------------------------------------------------------------------------------------------
+WORKDIR /code/client
+
+# package.json と yarn.lock だけを先にコピーして依存パッケージをインストール
+COPY client/package.json client/yarn.lock /code/client/
+RUN yarn install --frozen-lockfile
+
+# --------------------------------------------------------------------------------------------------------------
+# チェックスクリプトをコピー
+# --------------------------------------------------------------------------------------------------------------
+COPY check.sh /check.sh
+RUN chmod +x /check.sh
+
+# コンテナ起動時にチェックスクリプトを実行
+ENTRYPOINT ["/check.sh"]

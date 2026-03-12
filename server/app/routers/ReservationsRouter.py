@@ -12,7 +12,9 @@ from app import logging, schemas
 from app.config import Config
 from app.constants import JST
 from app.models.Channel import Channel
+from app.models.MirakurunReservation import MirakurunReservation
 from app.models.Program import Program
+from app.recording.MirakurunRecordingTask import MirakurunRecordingTask
 from app.utils import NormalizeToJSTDatetime
 from app.utils.edcb import (
     EventInfo,
@@ -657,23 +659,26 @@ def EncodeEDCBRecSettingData(record_settings: schemas.RecordSettings) -> RecSett
     return rec_setting_data
 
 
-def GetCtrlCmdUtil() -> CtrlCmdUtil:
-    """ バックエンドが EDCB かのチェックを行い、EDCB であれば EDCB の CtrlCmdUtil インスタンスを返す """
+def GetCtrlCmdUtil() -> CtrlCmdUtil | None:
+    """
+    バックエンドが EDCB であれば CtrlCmdUtil インスタンスを返す。
+    Mirakurun バックエンドの場合は None を返す (呼び出し元でバックエンド別の分岐を行う)。
+    """
 
     if Config().general.backend == 'EDCB':
         return CtrlCmdUtil()
     else:
-        logging.warning('[ReservationsRouter][GetCtrlCmdUtil] This API is only available when the backend is EDCB.')
-        raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail = 'This API is only available when the backend is EDCB',
-        )
+        return None
 
 
 async def GetReserveDataList(
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetCtrlCmdUtil)],
 ) -> list[ReserveDataRequired]:
-    """ すべての録画予約の情報を取得する """
+    """ すべての EDCB 録画予約の情報を取得する (EDCB バックエンド専用) """
+
+    # Mirakurun バックエンドでは EDCB 予約一覧は常に空とする
+    if edcb is None:
+        return []
 
     # EDCB から録画予約の一覧を取得
     reserve_data_list: list[ReserveDataRequired] | None = await edcb.sendEnumReserve()
@@ -738,21 +743,26 @@ async def GetRequiredProgramsForReservations(reserve_data_list: list[ReserveData
 
 async def GetReserveData(
     reservation_id: Annotated[int, Path(description='録画予約 ID 。')],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
-) -> ReserveDataRequired:
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetCtrlCmdUtil)],
+) -> ReserveDataRequired | None:
     """
-    指定された録画予約の情報を取得する
+    指定された録画予約の EDCB ReserveData を取得する (EDCB バックエンド専用)。
+    Mirakurun バックエンドの場合は None を返す (呼び出し元で MirakurunReservation を使う)。
 
     Args:
         reservation_id (int): 録画予約 ID
-        edcb (CtrlCmdUtil): EDCB API クライアント
+        edcb (CtrlCmdUtil | None): EDCB API クライアント (Mirakurun バックエンド時は None)
 
     Returns:
-        ReserveDataRequired: EDCB の ReserveData オブジェクト
+        ReserveDataRequired | None: EDCB の ReserveData オブジェクト、または Mirakurun 時は None
 
     Raises:
-        HTTPException: 指定された録画予約が見つからなかった場合
+        HTTPException: EDCB バックエンドで指定された録画予約が見つからなかった場合
     """
+
+    # Mirakurun バックエンドでは EDCB 予約データは存在しない
+    if edcb is None:
+        return None
 
     # 指定された録画予約の情報を取得
     for reserve_data in await GetReserveDataList(edcb):
@@ -944,6 +954,101 @@ async def GetIsRecordingInProgress(reserve_data: ReserveDataRequired, edcb: Ctrl
     return isinstance(await edcb.sendGetRecFilePath(reserve_data['reserve_id']), str)
 
 
+async def DecodeMirakurunReservation(reservation: MirakurunReservation) -> schemas.Reservation:
+    """
+    MirakurunReservation DB レコードを schemas.Reservation オブジェクトに変換する。
+    EPGStation の RecorderModel.toReservation() に相当する変換処理。
+
+    Args:
+        reservation (MirakurunReservation): 変換対象の録画予約 DB レコード
+
+    Returns:
+        schemas.Reservation: フロントエンド向けの録画予約スキーマ
+    """
+
+    # チャンネル情報を取得 (channel_id が保存されていればそれを使う)
+    channel: Channel | None = None
+    if reservation.channel_id:
+        channel = await Channel.get_or_none(id=reservation.channel_id)
+    # チャンネルが見つからない場合は network_id + service_id で最低限の情報を構築
+    if channel is None:
+        channel = Channel(
+            id = f'NID{reservation.network_id}-SID{reservation.service_id}',
+            display_channel_id = 'gr001',
+            network_id = reservation.network_id,
+            service_id = reservation.service_id,
+            transport_stream_id = None,
+            remocon_id = 0,
+            channel_number = '001',
+            type = TSInformation.getNetworkType(reservation.network_id),
+            name = f'NID{reservation.network_id}-SID{reservation.service_id}',
+            jikkyo_force = False,
+            is_subchannel = False,
+            is_radiochannel = False,
+            is_watchable = False,
+        )
+
+    # 番組情報を DB から取得 (event_id >= 0 の場合のみ; 手動予約は -1 が設定されている)
+    program: Program | None = None
+    if reservation.event_id >= 0:
+        program = await Program.filter(
+            network_id=reservation.network_id,
+            service_id=reservation.service_id,
+            event_id=reservation.event_id,
+        ).get_or_none()
+    # 番組情報が取得できない場合は予約レコードに保存された情報で代替を構築
+    if program is None:
+        program = Program(
+            id = f'NID{reservation.network_id}-SID{reservation.service_id}-EID{reservation.event_id}',
+            channel_id = channel.id,
+            network_id = reservation.network_id,
+            service_id = reservation.service_id,
+            event_id = reservation.event_id,
+            title = reservation.title,
+            description = reservation.description,
+            detail = {},
+            start_time = reservation.start_time,
+            end_time = reservation.end_time,
+            duration = float((reservation.end_time - reservation.start_time).total_seconds()),
+            is_free = True,
+            genres = reservation.genres,
+            video_type = '映像1080i(1125i)、アスペクト比16:9 パンベクトルなし',
+            video_codec = 'mpeg2',
+            video_resolution = '1080i',
+            primary_audio_type = '1/0モード(シングルモノ)',
+            primary_audio_language = '日本語',
+            primary_audio_sampling_rate = '48kHz',
+            secondary_audio_type = None,
+            secondary_audio_language = None,
+            secondary_audio_sampling_rate = None,
+        )
+
+    # 録画中かどうか (MirakurunRecordingTask の実行中タスク辞書で判定)
+    is_recording_in_progress: bool = MirakurunRecordingTask.isRecording(reservation.id)
+
+    # 録画予定ファイル名: 録画開始済みであればパスから取得、未開始であれば空文字
+    scheduled_recording_file_name: str = ''
+    if reservation.recording_file_path:
+        from pathlib import Path as _Path
+        scheduled_recording_file_name = _Path(reservation.recording_file_path).name
+
+    # Tortoise ORM モデルは本来 Pydantic モデルと型が非互換だが、
+    # FastAPI がよしなに変換してくれるので雑に Any にキャストしている (EDCB 側と同じパターン)
+    return schemas.Reservation(
+        id = reservation.id,
+        channel = cast(Any, channel),
+        program = cast(Any, program),
+        is_recording_in_progress = is_recording_in_progress,
+        # Mirakurun バックエンドでは事前のチューナー競合検出を行わないため常に Full とする
+        recording_availability = 'Full',
+        comment = reservation.comment,
+        scheduled_recording_file_name = scheduled_recording_file_name,
+        # Mirakurun バックエンドではビットレート情報がないため 0 を返す
+        estimated_recording_file_size = 0,
+        record_settings = reservation.getRecordSettings(),
+    )
+
+
 @router.get(
     '',
     summary = '録画予約情報一覧 API',
@@ -951,13 +1056,23 @@ async def GetIsRecordingInProgress(reserve_data: ReserveDataRequired, edcb: Ctrl
     response_model = schemas.Reservations,
 )
 async def ReservationsAPI(
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetCtrlCmdUtil)],
 ):
     """
     すべての録画予約の情報を取得する。
     """
 
-    # EDCB から現在のすべての録画予約の情報を取得
+    # Mirakurun バックエンド: MirakurunReservation テーブルから一覧を返す
+    if edcb is None:
+        mirakurun_reservations = await MirakurunReservation.filter(
+            status__in=['Pending', 'Recording'],
+        ).order_by('start_time').all()
+        mirakurun_schemas = await asyncio.gather(*(
+            DecodeMirakurunReservation(r) for r in mirakurun_reservations
+        ))
+        return schemas.Reservations(total=len(mirakurun_schemas), reservations=list(mirakurun_schemas))
+
+    # EDCB バックエンド: EDCB から現在のすべての録画予約の情報を取得
     reserve_data_list: list[ReserveDataRequired] | None = await edcb.sendEnumReserve()
     if reserve_data_list is None:
         # None が返ってきた場合は空のリストを返す
@@ -1002,7 +1117,7 @@ async def ReservationsAPI(
 )
 async def AddReservationAPI(
     reserve_add_request: Annotated[schemas.ReservationAddRequest, Body(description='追加する録画予約の設定。')],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetCtrlCmdUtil)],
 ):
     """
     録画予約を追加する。
@@ -1025,6 +1140,55 @@ async def AddReservationAPI(
             status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail = 'Specified channel was not found',
         )
+
+    # Mirakurun バックエンド: MirakurunReservation を作成して返す
+    if edcb is None:
+        # 同一番組の重複予約がないか確認
+        duplicate = await MirakurunReservation.filter(
+            network_id=program.network_id,
+            service_id=program.service_id,
+            event_id=program.event_id,
+            status__in=['Pending', 'Recording'],
+        ).get_or_none()
+        if duplicate is not None:
+            logging.error(
+                f'[ReservationsRouter][AddReservationAPI] The same program is already reserved for Mirakurun. '
+                f'[program_id: {reserve_add_request.program_id}]'
+            )
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'The same program_id is already reserved',
+            )
+
+        # 録画開始/終了マージンを決定 (None の場合は 0 秒をデフォルトとする)
+        start_margin = float(reserve_add_request.record_settings.recording_start_margin or 0)
+        end_margin = float(reserve_add_request.record_settings.recording_end_margin or 0)
+
+        # MirakurunReservation レコードを作成
+        reservation = MirakurunReservation(
+            channel=channel,
+            channel_id=channel.id,
+            network_id=program.network_id,
+            service_id=program.service_id,
+            event_id=program.event_id,
+            title=program.title,
+            description=program.description,
+            genres=program.genres,
+            start_time=program.start_time,
+            end_time=program.end_time,
+            recording_start_margin=start_margin,
+            recording_end_margin=end_margin,
+            status='Pending',
+            recording_file_path=None,
+            comment='',
+        )
+        reservation.setRecordSettings(reserve_add_request.record_settings)
+        await reservation.save()
+        logging.info(
+            f'[ReservationsRouter][AddReservationAPI] Mirakurun reservation added. '
+            f'[reservation_id: {reservation.id} / program_id: {reserve_add_request.program_id}]'
+        )
+        return
 
     # EDCB バックエンド利用時は必ずチャンネル情報に transport_stream_id が含まれる
     assert channel.transport_stream_id is not None, 'transport_stream_id is missing.'
@@ -1205,14 +1369,26 @@ async def AddReservationAPI(
     response_model = schemas.Reservation,
 )
 async def ReservationAPI(
-    reserve_data: Annotated[ReserveDataRequired, Depends(GetReserveData)],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    reservation_id: Annotated[int, Path(description='録画予約 ID 。')],
+    reserve_data: Annotated[ReserveDataRequired | None, Depends(GetReserveData)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetCtrlCmdUtil)],
 ):
     """
     指定された録画予約の情報を取得する。
     """
 
-    # EDCB の ReserveData オブジェクトを schemas.Reservation オブジェクトに変換して返す
+    # Mirakurun バックエンド: MirakurunReservation から取得して返す
+    if edcb is None:
+        mirakurun_reservation = await MirakurunReservation.get_or_none(id=reservation_id)
+        if mirakurun_reservation is None:
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'Specified reservation_id was not found',
+            )
+        return await DecodeMirakurunReservation(mirakurun_reservation)
+
+    # EDCB バックエンド: EDCB の ReserveData オブジェクトを schemas.Reservation オブジェクトに変換して返す
+    assert reserve_data is not None
     return await DecodeEDCBReserveData(
         reserve_data,
         is_recording_in_progress = await GetIsRecordingInProgress(reserve_data, edcb),
@@ -1226,16 +1402,41 @@ async def ReservationAPI(
     response_model = schemas.Reservation,
 )
 async def UpdateReservationAPI(
-    reserve_data: Annotated[ReserveDataRequired, Depends(GetReserveData)],
+    reservation_id: Annotated[int, Path(description='録画予約 ID 。')],
+    reserve_data: Annotated[ReserveDataRequired | None, Depends(GetReserveData)],
     reserve_update_request: Annotated[schemas.ReservationUpdateRequest, Body(description='更新する録画予約の設定。')],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetCtrlCmdUtil)],
 ):
     """
     指定された録画予約の設定を更新する。
     """
 
-    # 現在の録画予約の ReserveData に新しい録画設定を上書きマージする形で EDCB に送信する
+    # Mirakurun バックエンド: MirakurunReservation の録画設定を更新して返す
+    if edcb is None:
+        mirakurun_reservation = await MirakurunReservation.get_or_none(id=reservation_id)
+        if mirakurun_reservation is None:
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'Specified reservation_id was not found',
+            )
+        new_settings = reserve_update_request.record_settings
+        # is_enabled フラグを EDCB の有効/無効概念と同様に Mirakurun の status に反映する
+        ## is_enabled=False → Pending 状態の予約をキャンセル (EPG ハイライトから除外されるよう Cancelled に変更)
+        ## is_enabled=True  → Cancelled 状態の予約を再度 Pending に戻す (EPG ハイライトが再表示される)
+        if new_settings.is_enabled is False and mirakurun_reservation.status == 'Pending':
+            mirakurun_reservation.status = 'Cancelled'
+        elif new_settings.is_enabled is True and mirakurun_reservation.status == 'Cancelled':
+            mirakurun_reservation.status = 'Pending'
+        # 録画開始/終了マージンを更新
+        mirakurun_reservation.recording_start_margin = float(new_settings.recording_start_margin or 0)
+        mirakurun_reservation.recording_end_margin = float(new_settings.recording_end_margin or 0)
+        mirakurun_reservation.setRecordSettings(new_settings)
+        await mirakurun_reservation.save()
+        return await DecodeMirakurunReservation(mirakurun_reservation)
+
+    # EDCB バックエンド: 現在の録画予約の ReserveData に新しい録画設定を上書きマージする形で EDCB に送信する
     ## 一見省略しても良さそうな録画予約対象のチャンネル情報や番組情報なども省略せずに全て含める必要がある (さもないと録画予約情報が破壊される…)
+    assert reserve_data is not None
     reserve_data['rec_setting'] = EncodeEDCBRecSettingData(reserve_update_request.record_settings)
 
     # EDCB に指定された録画予約を更新するように指示
@@ -1250,6 +1451,7 @@ async def UpdateReservationAPI(
 
     # 更新された録画予約の情報を schemas.Reservation オブジェクトに変換して返す
     updated_reserve_data = await GetReserveData(reserve_data['reserve_id'], edcb)
+    assert updated_reserve_data is not None
     return await DecodeEDCBReserveData(
         updated_reserve_data,
         is_recording_in_progress = await GetIsRecordingInProgress(updated_reserve_data, edcb),
@@ -1262,14 +1464,29 @@ async def UpdateReservationAPI(
     status_code = status.HTTP_204_NO_CONTENT,
 )
 async def DeleteReservationAPI(
-    reserve_data: Annotated[ReserveDataRequired, Depends(GetReserveData)],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    reservation_id: Annotated[int, Path(description='録画予約 ID 。')],
+    reserve_data: Annotated[ReserveDataRequired | None, Depends(GetReserveData)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetCtrlCmdUtil)],
 ):
     """
     指定された録画予約を削除する。
     """
 
-    # EDCB に指定された録画予約を削除するように指示
+    # Mirakurun バックエンド: MirakurunReservation をキャンセル/削除する
+    if edcb is None:
+        mirakurun_reservation = await MirakurunReservation.get_or_none(id=reservation_id)
+        if mirakurun_reservation is None:
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'Specified reservation_id was not found',
+            )
+        # 録画中であればタスクをキャンセルしてからレコードを削除する
+        await MirakurunRecordingTask.cancelRecording(reservation_id)
+        await mirakurun_reservation.delete()
+        return
+
+    # EDCB バックエンド: EDCB に指定された録画予約を削除するように指示
+    assert reserve_data is not None
     result = await edcb.sendDelReserve([reserve_data['reserve_id']])
     if result is False:
         # False が返ってきた場合はエラーを返す
