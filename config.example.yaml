@@ -114,3 +114,19 @@ capture:
     upload_folders: [
         'E:\TV-Capture',
     ]
+
+# =============================== 通知機能の設定 ================================
+notification:
+
+    # Telegram 通知機能の有効/無効
+    # true に設定すると、録画完了時などに Telegram Bot 経由で通知が送信されます。
+    telegram_notification_enabled: false
+
+    # Telegram Bot トークン (@BotFather で取得したもの)
+    telegram_bot_token: ''
+
+    # 送信先のチャット ID またはチャンネル名 (例: -1001234567890, @mychannel)
+    telegram_chat_id: ''
+
+    # KonomiTV の公開ベース URL (再生ボタンの URL 生成に使用。空文字列の場合はボタンを省略)
+    telegram_base_url: ''

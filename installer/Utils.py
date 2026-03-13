@@ -555,8 +555,14 @@ def SaveConfig(config_yaml_path: Path, config_dict: dict[str, dict[str, Any]]) -
 
     # config.yaml の内容を更新して保存
     # コメントやフォーマットを保持して保存するために更新方法を工夫している
+    # バージョンアップ/ダウン時に古い config.yaml と新しいテンプレートのキー構成が異なる場合があるため、
+    # 新しいテンプレート (config_raw) に存在しないキーはスキップして KeyError を回避する
     for key in config_dict:
+        if key not in config_raw:
+            continue
         for sub_key in config_dict[key]:
+            if sub_key not in config_raw[key]:
+                continue
             # 文字列のリストを更新する場合は clear() と extend() を使う
             if type(config_dict[key][sub_key]) is list:
                 if type(config_raw[key][sub_key]) is ruamel.yaml.CommentedSeq:
