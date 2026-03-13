@@ -5,7 +5,12 @@ from fastapi import APIRouter, Body, Depends, HTTPException, status
 from pydantic import ValidationError
 
 from app import logging
-from app.config import ClientSettings, Config, ReadCurrentConfig, SaveConfig, ServerSettings
+from app.config import (
+    ClientSettings,
+    ReadCurrentConfig,
+    SaveConfig,
+    ServerSettings,
+)
 from app.models.User import User
 from app.routers.UsersRouter import GetCurrentAdminUser, GetCurrentUser
 from app.utils.TelegramNotifier import TelegramNotifier
