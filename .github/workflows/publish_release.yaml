@@ -1,28 +1,35 @@
 
 name: Publish Release
 
-# release ブランチに変更があったとき or 手動実行
+# release ブランチへのプッシュ (リリースコミット) or v* タグのプッシュ or 手動実行
 on:
   push:
     branches:
       - release
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 # ジョブの定義
 jobs:
 
   # インストーラーのビルド
-  ## リリースコミットでのみ実行する (lint → build の順で実行される)
+  ## タグプッシュ・手動実行・リリースコミットの場合のみ実行する
   build_installer:
-    if: contains(github.event.head_commit.message, 'Release:')
+    if: |
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, 'Release:')
     uses: ./.github/workflows/build_installer.yaml
 
   # インストーラーのビルドが終わったら、タグ付けしてリリースを公開
   ## サードパーティーライブラリは本家 KonomiTV のリリースから取得するため、ここではビルドしない
-  ## リリースコミットでのみ実行する
   publish_release:
     runs-on: ubuntu-22.04
-    if: contains(github.event.head_commit.message, 'Release:')
+    if: |
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, 'Release:')
     needs:
       - build_installer
     steps:
@@ -52,16 +59,22 @@ jobs:
           path: KonomiTV
           token: ${{ secrets.GIT_PUSH_TOKEN }}
 
-      # KonomiTV のバージョン番号をリリースコミットのコミットメッセージから取得
+      # バージョン番号を取得する
+      ## タグプッシュの場合はタグ名から、それ以外はリリースコミットのメッセージから取得する
       - name: Get Version
         id: get_version
         env:
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
-          echo version=$(echo "$COMMIT_MESSAGE" | sed -e 's/Release: version //') >> $GITHUB_OUTPUT
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            # タグ名の先頭の "v" を除去してバージョン番号を取得
+            echo version=$(echo "${{ github.ref_name }}" | sed 's/^v//') >> $GITHUB_OUTPUT
+          else
+            echo version=$(echo "$COMMIT_MESSAGE" | sed -e 's/Release: version //') >> $GITHUB_OUTPUT
+          fi
 
       # 直前のタグからの変更履歴を生成する
-      ## マージコミットを除いた全コミットを "- <件名> (<ハッシュ>" 形式で列挙する
+      ## マージコミットを除いた全コミットを "- <件名> (<ハッシュ>)" 形式で列挙する
       - name: Generate Changelog
         id: changelog
         working-directory: KonomiTV
@@ -73,15 +86,16 @@ jobs:
             RANGE="HEAD"
           fi
           CHANGELOG=$(git log "$RANGE" --pretty=format:"- %s (%h)" --no-merges)
-          # GitHub Actions の multiline output として出力する
           {
             echo 'changelog<<EOF'
             echo "$CHANGELOG"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
-      # リリースコミットに対応する新バージョンのタグを release ブランチで作成
+      # release ブランチプッシュの場合のみ新バージョンのタグを作成する
+      ## タグプッシュの場合はすでにタグが存在するためスキップする
       - name: Create New Version Tag
+        if: "!startsWith(github.ref, 'refs/tags/')"
         working-directory: KonomiTV
         run: |
           git config user.name 'github-actions[bot]'
