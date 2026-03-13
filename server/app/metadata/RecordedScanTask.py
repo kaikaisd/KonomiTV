@@ -614,7 +614,18 @@ class RecordedScanTask:
                     if file_size == last_size:
                         # 最終更新日時の継続更新中でない場合はスキップ
                         if mtime_continuous_start_at is None:
-                            logging.warning(f'{file_path}: File is not recording. ignored.')
+                            # MirakurunRecordingTask が同ファイルに書き込み中の場合は
+                            # スキャン周期と書き込みタイミングのズレによる一時的な誤検知のため、
+                            # WARNING ではなく DEBUG に落として静かにスキップする
+                            from app.models.MirakurunReservation import MirakurunReservation
+                            active_reservation = await MirakurunReservation.get_or_none(
+                                recording_file_path = str(file_path),
+                                status = 'Recording',
+                            )
+                            if active_reservation is not None:
+                                logging.debug(f'{file_path}: File is being recorded by MirakurunRecordingTask, skipping.')
+                            else:
+                                logging.warning(f'{file_path}: File is not recording. ignored.')
                             return
                         # 最終更新日時の継続更新が1分未満の場合もスキップ
                         continuous_duration = (now - mtime_continuous_start_at).total_seconds()
