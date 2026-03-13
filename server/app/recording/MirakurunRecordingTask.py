@@ -10,10 +10,11 @@ from typing import ClassVar
 import aiohttp
 
 from app import logging
-from app.config import Config
-from app.constants import API_REQUEST_HEADERS, JST
+from app.config import Config, ReadCurrentConfig
+from app.constants import API_REQUEST_HEADERS, JST, THUMBNAILS_DIR
 from app.models.MirakurunReservation import MirakurunReservation
 from app.utils import GetMirakurunAPIEndpointURL
+from app.utils.TelegramNotifier import TelegramNotifier
 
 
 # ストリームの読み取りチャンクサイズ (64 KB)
@@ -307,6 +308,22 @@ class MirakurunRecordingTask:
             reservation.status = 'Completed'  # type: ignore[assignment]
             await reservation.save()
 
+            # Telegram 通知を非同期で送信する (録画フローをブロックしない)
+            # RecordedScanTask によるスキャン完了・サムネイル生成を待機してから通知するため別タスクで実行する
+            asyncio.create_task(
+                self._sendCompletionNotification(
+                    reservation_id = reservation_id,
+                    title = reservation.title,
+                    channel_name = channel_name or None,
+                    start_time = reservation.start_time,
+                    end_time = reservation.end_time,
+                    description = reservation.description,
+                    output_path = output_path,
+                    bytes_written = bytes_written,
+                ),
+                name = f'MirakurunNotification-{reservation_id}',
+            )
+
         except asyncio.CancelledError:
             # シャットダウンなどによるキャンセル: ファイルが途中まで書き込まれている場合はそのまま残す
             logging.warning(
@@ -338,6 +355,96 @@ class MirakurunRecordingTask:
                 await session.close()
             # 録画タスク辞書から除去
             MirakurunRecordingTask._recording_tasks.pop(reservation_id, None)
+
+    async def _sendCompletionNotification(
+        self,
+        reservation_id: int,
+        title: str,
+        channel_name: str | None,
+        start_time: datetime,
+        end_time: datetime,
+        description: str,
+        output_path: Path,
+        bytes_written: int,
+    ) -> None:
+        """
+        録画完了後に Telegram 通知を送信する。
+        RecordedScanTask がスキャンを完了してサムネイルが生成されるまで待機してから送信するため、
+        最大 _NOTIFICATION_SCAN_TIMEOUT_SECONDS 秒待機する。
+        通知設定が無効な場合や bot_token/chat_id が未設定の場合は何もしない。
+
+        Args:
+            reservation_id (int): 録画予約 ID (ログ出力用)
+            title (str): 番組タイトル
+            channel_name (str | None): チャンネル名 (不明な場合は None)
+            start_time (datetime): 録画開始時刻
+            end_time (datetime): 録画終了時刻
+            description (str): 番組概要
+            output_path (Path): 録画ファイルのパス
+            bytes_written (int): 録画中に書き込んだバイト数 (ファイルサイズの初期値)
+        """
+        # 通知設定を確認する (SaveConfig はインメモリを更新しないため ReadCurrentConfig を使う)
+        cfg = ReadCurrentConfig().notification
+        if not cfg.telegram_notification_enabled or not cfg.telegram_bot_token or not cfg.telegram_chat_id:
+            return
+
+        # RecordedVideo レコードが DB に登録されサムネイルが生成されるのを待つ
+        # RecordedScanTask のスキャン完了まで最大 300 秒 (5 分) 待機する
+        from app.models.RecordedVideo import RecordedVideo
+        POLL_INTERVAL_SECONDS = 5
+        MAX_POLLS = 60  # 5 秒 × 60 = 300 秒
+        file_hash = ''
+        recorded_program_id = 0
+
+        for _ in range(MAX_POLLS):
+            await asyncio.sleep(POLL_INTERVAL_SECONDS)
+            recorded_video = await RecordedVideo.get_or_none(file_path=str(output_path))
+            if recorded_video is not None:
+                file_hash = recorded_video.file_hash
+                recorded_program_id = recorded_video.recorded_program_id
+                # サムネイルが生成済みであればここで待機終了
+                thumbnail_path = THUMBNAILS_DIR / f'{file_hash}.webp'
+                if thumbnail_path.exists():
+                    logging.info(
+                        f'MirakurunRecordingTask: Thumbnail ready for reservation_id={reservation_id}, '
+                        'sending notification.'
+                    )
+                    break
+        else:
+            # タイムアウト: RecordedVideo またはサムネイルが見つからないままでも通知は送信する
+            logging.warning(
+                f'MirakurunRecordingTask: Timed out waiting for scan/thumbnail for '
+                f'reservation_id={reservation_id}. Sending notification without thumbnail.'
+            )
+
+        # ファイルサイズを取得する (録画完了後にファイルが存在すれば stat で取得、なければ書き込みバイト数を使う)
+        file_size = bytes_written
+        try:
+            if output_path.exists():
+                file_size = output_path.stat().st_size
+        except OSError:
+            pass
+
+        # 放送時間を HH:MM 形式でフォーマット
+        start_str = start_time.astimezone(JST).strftime('%H:%M')
+        end_str = end_time.astimezone(JST).strftime('%H:%M')
+        duration_min = max(1, int((end_time - start_time).total_seconds() / 60))
+
+        # Telegram 通知を送信する
+        await TelegramNotifier.sendRecordingNotification(
+            bot_token = cfg.telegram_bot_token,
+            chat_id = cfg.telegram_chat_id,
+            title = title,
+            channel_name = channel_name,
+            start_time_jst = start_str,
+            end_time_jst = end_str,
+            duration_min = duration_min,
+            description = description,
+            file_size = file_size,
+            file_hash = file_hash,
+            recorded_program_id = recorded_program_id,
+            base_url = cfg.telegram_base_url,
+        )
 
     @classmethod
     def isRecording(cls, reservation_id: int) -> bool:
