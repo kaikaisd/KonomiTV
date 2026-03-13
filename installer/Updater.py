@@ -88,10 +88,12 @@ def Updater(version: str) -> None:
 
         # 指定されたフォルダが KonomiTV のフォルダ/ファイル配置と異なる
         ## 大まかにフォルダ/ファイル配置をチェック (すべてのファイル、フォルダがあれば OK)
+        ## Linux はファイルシステムが大文字小文字を区別するため、README.md / Readme.md の両方を許容する
+        readme_exists = (update_path / 'README.md').exists() or (update_path / 'Readme.md').exists()
         if not (
             (update_path / 'config.example.yaml').exists() and
             (update_path / 'License.txt').exists() and
-            (update_path / 'Readme.md').exists() and
+            readme_exists and
             (update_path / 'client/').exists() and
             (update_path / 'installer/').exists() and
             (update_path / 'server/').exists() and
