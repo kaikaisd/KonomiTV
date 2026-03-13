@@ -25,8 +25,46 @@ env:
 # ジョブの定義
 jobs:
 
+  # インストーラーの Python コードのリント・型チェック
+  ## すべてのビルドジョブはこのジョブが成功した後に実行される
+  lint:
+    runs-on: ubuntu-22.04
+    steps:
+
+      # KonomiTV のソースコードをチェックアウト
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Python 3.11 環境をセットアップ
+      ## 事前に Runner 自体に入っている Python に Poetry をインストールしておく必要がある
+      - name: Install Poetry (for Runner)
+        run: python -m pip install poetry
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'poetry'
+          cache-dependency-path: '${{ github.workspace }}/installer/poetry.lock'
+
+      # インストーラーの依存関係をインストール
+      - name: Install Dependencies
+        working-directory: installer/
+        run: poetry install --no-root
+
+      # Ruff によるリント (--fix は使わない: CI では変更せず検出のみ行う)
+      - name: Lint with Ruff
+        working-directory: installer/
+        run: poetry run ruff check .
+
+      # Pyright による型チェック
+      - name: Type Check with Pyright
+        working-directory: installer/
+        run: poetry run pyright
+
   # Windows 向けのインストーラーのビルド
+  ## lint ジョブが成功した後に実行される
   build-windows:
+    needs: lint
     runs-on: windows-2022
     steps:
 
@@ -66,7 +104,9 @@ jobs:
           path: installer/dist/KonomiTV-Installer.exe
 
   # Linux 向けのインストーラーのビルド
+  ## lint ジョブが成功した後に実行される
   build-linux:
+    needs: lint
     strategy:
       fail-fast: false  # 一つのビルドが失敗しても他のビルドは継続する
       matrix:

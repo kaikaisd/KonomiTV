@@ -12,7 +12,7 @@ on:
 jobs:
 
   # インストーラーのビルド
-  ## リリースコミットでのみ実行する
+  ## リリースコミットでのみ実行する (lint → build の順で実行される)
   build_installer:
     if: contains(github.event.head_commit.message, 'Release:')
     uses: ./.github/workflows/build_installer.yaml
@@ -60,6 +60,26 @@ jobs:
         run: |
           echo version=$(echo "$COMMIT_MESSAGE" | sed -e 's/Release: version //') >> $GITHUB_OUTPUT
 
+      # 直前のタグからの変更履歴を生成する
+      ## マージコミットを除いた全コミットを "- <件名> (<ハッシュ>" 形式で列挙する
+      - name: Generate Changelog
+        id: changelog
+        working-directory: KonomiTV
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            RANGE="${LAST_TAG}..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+          CHANGELOG=$(git log "$RANGE" --pretty=format:"- %s (%h)" --no-merges)
+          # GitHub Actions の multiline output として出力する
+          {
+            echo 'changelog<<EOF'
+            echo "$CHANGELOG"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       # リリースコミットに対応する新バージョンのタグを release ブランチで作成
       - name: Create New Version Tag
         working-directory: KonomiTV
@@ -71,6 +91,7 @@ jobs:
           git push origin --tags
 
       # リリースを作成
+      ## body に変更履歴を含める (generateReleaseNotes も併用して PR ベースのノートも付与する)
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
@@ -78,3 +99,7 @@ jobs:
           generateReleaseNotes: true
           name: KonomiTV (Custom Fork) ${{ steps.get_version.outputs.version }}
           tag: v${{ steps.get_version.outputs.version }}
+          body: |
+            ## 変更履歴 / Changelog
+
+            ${{ steps.changelog.outputs.changelog }}
