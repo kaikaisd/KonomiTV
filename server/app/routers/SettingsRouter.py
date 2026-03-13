@@ -77,7 +77,9 @@ async def ServerSettingsAPI():
     Docker 環境では、パス指定の項目は Docker 環境向けの Prefix (/host-rootfs) が付与された状態で返される。<br>
     """
 
-    return Config()
+    # SaveConfig() はディスクのみ更新し、インメモリの _CONFIG は更新しないため、
+    # 設定保存後すぐにページをリロードしても最新値が反映されるよう ReadCurrentConfig() を使う
+    return ReadCurrentConfig()
 
 
 @router.put(
