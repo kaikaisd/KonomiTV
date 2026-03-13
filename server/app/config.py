@@ -595,6 +595,46 @@ def Config() -> ServerSettings:
     return _CONFIG
 
 
+def ReadCurrentConfig() -> ServerSettings:
+    """
+    config.yaml から最新のサーバー設定データを読み込んで返す。
+    LoadConfig() と異なり _CONFIG を変更せず、何度でも呼び出すことができる。
+    主に SaveConfig() で保存された設定をサーバー再起動なしに取得するために使用する。
+    バリデーションはスキップするため、形式チェックは行われない点に注意。
+
+    Returns:
+        ServerSettings: config.yaml から読み込んだ最新のサーバー設定データ
+    """
+
+    global _CONFIG_YAML_PATH
+
+    def _merge_dicts(base_dict: dict[str, Any], override_dict: dict[str, Any]) -> dict[str, Any]:
+        """デフォルト設定と読み込み設定をディープマージする"""
+        merged_dict = dict(base_dict)
+        for key, value in override_dict.items():
+            if (
+                key in merged_dict
+                and isinstance(merged_dict[key], dict)
+                and isinstance(value, dict)
+            ):
+                merged_dict[key] = _merge_dicts(merged_dict[key], value)
+            else:
+                merged_dict[key] = value
+        return merged_dict
+
+    try:
+        with open(_CONFIG_YAML_PATH, encoding='utf-8') as file:
+            config_raw = ruamel.yaml.YAML().load(file) or {}
+        config_dict: dict[str, Any] = dict(config_raw)
+        # config.yaml に存在しない設定値はデフォルト値で補完する
+        default_config_dict = ServerSettings().model_dump(mode='json')
+        config_dict = _merge_dicts(default_config_dict, config_dict)
+        return ServerSettings.model_validate(config_dict, context={'bypass_validation': True})
+    except Exception:
+        # ファイル読み込み失敗時はインメモリの設定にフォールバック
+        return Config()
+
+
 def GetServerPort() -> int:
     """
     サーバーのポート番号を返す (KonomiTV-Service.py でポート番号を取得するために使用)

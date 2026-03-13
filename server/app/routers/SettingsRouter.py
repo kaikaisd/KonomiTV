@@ -1,10 +1,11 @@
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
+from pydantic import ValidationError
 
 from app import logging
-from app.config import ClientSettings, Config, SaveConfig, ServerSettings
+from app.config import ClientSettings, Config, ReadCurrentConfig, SaveConfig, ServerSettings
 from app.models.User import User
 from app.routers.UsersRouter import GetCurrentAdminUser, GetCurrentUser
 from app.utils.TelegramNotifier import TelegramNotifier
@@ -85,16 +86,31 @@ async def ServerSettingsAPI():
     status_code = status.HTTP_204_NO_CONTENT,
 )
 async def ServerSettingsUpdateAPI(
-    server_settings: Annotated[ServerSettings, Body(description='更新するサーバー設定のデータ。')],
+    server_settings_raw: Annotated[dict[str, Any], Body(description='更新するサーバー設定のデータ。')],
     current_user: Annotated[User, Depends(GetCurrentAdminUser)],
 ):
     """
     現在稼働中の KonomiTV サーバーのサーバー設定を更新する。<br>
     Docker 環境では、パス指定の項目には Docker 環境向けの Prefix (/host-rootfs) を付与した状態でリクエストする必要がある。<br>
-    Pydantic のカスタムバリデーターの実装の都合上、バリデーション処理中はメインスレッドが数秒間ブロッキングされることがあるので注意。<br>
+    バックエンド (EDCB/Mirakurun) への接続確認はサーバー起動時に実施済みのためスキップする。<br>
+    接続確認のブロッキング処理が不要になった分、レスポンスが高速化される。<br>
 
     JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されていて、かつ管理者アカウントでないとアクセスできない。
     """
+
+    # バックエンド接続確認をスキップしてバリデーションを実行する
+    # 接続確認 (EDCB/Mirakurun の疎通確認) はサーバー起動時に一度実施済みであり、
+    # 設定更新時に再度実行するとバックエンドが一時停止中の場合に設定を保存できなくなるため、スキップする
+    try:
+        server_settings = ServerSettings.model_validate(
+            server_settings_raw,
+            context = {'bypass_validation': True},
+        )
+    except ValidationError as error:
+        raise HTTPException(
+            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail = str(error),
+        )
 
     # バリデーションが完了したサーバー設定を config.yaml に保存する
     SaveConfig(server_settings)
@@ -114,7 +130,10 @@ async def TestTelegramNotificationAPI(
     JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されていないとアクセスできない。
     """
 
-    cfg = Config().notification
+    # Config() はサーバー起動時に読み込んだインメモリの設定を返すが、SaveConfig() は config.yaml のみ更新し
+    # インメモリ設定を更新しないため、保存直後にテストを実行すると古い設定が参照される問題がある
+    # ReadCurrentConfig() は毎回 config.yaml を読み直すため、再起動なしに最新の設定を参照できる
+    cfg = ReadCurrentConfig().notification
 
     # Telegram 通知が無効の場合はエラーを返す
     if not cfg.telegram_notification_enabled:
