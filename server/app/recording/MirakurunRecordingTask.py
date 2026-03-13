@@ -388,11 +388,19 @@ class MirakurunRecordingTask:
         if not cfg.telegram_notification_enabled or not cfg.telegram_bot_token or not cfg.telegram_chat_id:
             return
 
-        # RecordedVideo レコードが DB に登録されサムネイルが生成されるのを待つ
-        # RecordedScanTask のスキャン完了まで最大 300 秒 (5 分) 待機する
+        # RecordedVideo レコードが DB に登録され、全バックグラウンド解析が完了するのを待つ
+        # バックグラウンド解析は KeyFrameAnalyzer / CMSectionsDetector / ThumbnailGenerator の
+        # 3 タスクを asyncio.gather で並列実行し、最も時間のかかるキーフレーム解析が終わると全完了する。
+        # それぞれの完了指標:
+        #   key_frames が非空     → キーフレーム解析完了 (最も遅い: 録画長に依存、数分かかることがある)
+        #   cm_sections is not None → CM 区間検出完了 (高速)
+        #   thumbnail_info is not None → サムネイル生成完了 (中程度)
+        # 全解析完了の主判定として key_frames 非空を使い、
+        # キーフレーム解析失敗時のフォールバックとして thumbnail_info の設定有無を確認する。
+        # 最大 600 秒 (10 分) まで 5 秒ごとにポーリングする。
         from app.models.RecordedVideo import RecordedVideo
         POLL_INTERVAL_SECONDS = 5
-        MAX_POLLS = 60  # 5 秒 × 60 = 300 秒
+        MAX_POLLS = 120  # 5 秒 × 120 = 600 秒
         file_hash = ''
         recorded_program_id = 0
 
@@ -402,19 +410,24 @@ class MirakurunRecordingTask:
             if recorded_video is not None:
                 file_hash = recorded_video.file_hash
                 recorded_program_id = recorded_video.recorded_program_id
-                # サムネイルが生成済みであればここで待機終了
-                thumbnail_path = THUMBNAILS_DIR / f'{file_hash}.webp'
-                if thumbnail_path.exists():
+                # 全バックグラウンド解析完了の確認:
+                # キーフレームが設定済み (主判定) か、キーフレーム解析が失敗した場合のフォールバックとして
+                # サムネイル情報が DB に保存済みであれば全解析完了とみなす
+                all_analysis_done = (
+                    len(recorded_video.key_frames) > 0 or
+                    recorded_video.thumbnail_info is not None
+                )
+                if all_analysis_done:
                     logging.info(
-                        f'MirakurunRecordingTask: Thumbnail ready for reservation_id={reservation_id}, '
+                        f'MirakurunRecordingTask: Background analysis completed for reservation_id={reservation_id}, '
                         'sending notification.'
                     )
                     break
         else:
-            # タイムアウト: RecordedVideo またはサムネイルが見つからないままでも通知は送信する
+            # タイムアウト: 解析が終わらなくてもサムネイルの有無に応じて通知を送信する
             logging.warning(
-                f'MirakurunRecordingTask: Timed out waiting for scan/thumbnail for '
-                f'reservation_id={reservation_id}. Sending notification without thumbnail.'
+                f'MirakurunRecordingTask: Timed out waiting for background analysis for '
+                f'reservation_id={reservation_id}. Sending notification with available data.'
             )
 
         # ファイルサイズを取得する (録画完了後にファイルが存在すれば stat で取得、なければ書き込みバイト数を使う)
