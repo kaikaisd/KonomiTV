@@ -162,7 +162,7 @@ class TelegramNotifier:
         # base_url が空文字列の場合はボタンを省略する
         reply_markup: dict[str, object] | None = None
         if base_url:
-            playback_url = f'{base_url.rstrip("/")}/videos/{recorded_program_id}'
+            playback_url = f'{base_url.rstrip("/")}/videos/watch/{recorded_program_id}'
             reply_markup = {
                 'inline_keyboard': [[
                     {'text': '▶ 再生 / Watch', 'url': playback_url},
