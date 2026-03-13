@@ -11,7 +11,7 @@ import aiohttp
 
 from app import logging
 from app.config import Config, ReadCurrentConfig
-from app.constants import API_REQUEST_HEADERS, JST, THUMBNAILS_DIR
+from app.constants import API_REQUEST_HEADERS, JST
 from app.models.MirakurunReservation import MirakurunReservation
 from app.utils import GetMirakurunAPIEndpointURL
 from app.utils.TelegramNotifier import TelegramNotifier
@@ -61,6 +61,8 @@ class MirakurunRecordingTask:
 
     # クラス変数: 実行中の録画 Task を reservation_id -> asyncio.Task で管理
     _recording_tasks: ClassVar[dict[int, asyncio.Task[None]]] = {}
+    # クラス変数: 実行中の通知 Task を保持する Set (GC による早期破棄を防ぐため参照を保持する)
+    _notification_tasks: ClassVar[set[asyncio.Task[None]]] = set()
 
     def __init__(self) -> None:
         """
@@ -310,7 +312,8 @@ class MirakurunRecordingTask:
 
             # Telegram 通知を非同期で送信する (録画フローをブロックしない)
             # RecordedScanTask によるスキャン完了・サムネイル生成を待機してから通知するため別タスクで実行する
-            asyncio.create_task(
+            # RUF006: GC による早期破棄を防ぐため _notification_tasks に参照を保持し、完了時に自動削除する
+            notification_task = asyncio.create_task(
                 self._sendCompletionNotification(
                     reservation_id = reservation_id,
                     title = reservation.title,
@@ -323,6 +326,8 @@ class MirakurunRecordingTask:
                 ),
                 name = f'MirakurunNotification-{reservation_id}',
             )
+            MirakurunRecordingTask._notification_tasks.add(notification_task)
+            notification_task.add_done_callback(MirakurunRecordingTask._notification_tasks.discard)
 
         except asyncio.CancelledError:
             # シャットダウンなどによるキャンセル: ファイルが途中まで書き込まれている場合はそのまま残す
