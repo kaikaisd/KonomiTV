@@ -7,6 +7,7 @@ from app import logging
 from app.config import ClientSettings, Config, SaveConfig, ServerSettings
 from app.models.User import User
 from app.routers.UsersRouter import GetCurrentAdminUser, GetCurrentUser
+from app.utils.TelegramNotifier import TelegramNotifier
 
 
 # ルーター
@@ -97,3 +98,47 @@ async def ServerSettingsUpdateAPI(
 
     # バリデーションが完了したサーバー設定を config.yaml に保存する
     SaveConfig(server_settings)
+
+
+@router.post(
+    '/notification/test',
+    summary = 'Telegram テスト通知送信 API',
+    response_description = 'テスト通知の送信結果。',
+)
+async def TestTelegramNotificationAPI(
+    current_user: Annotated[User, Depends(GetCurrentUser)],
+) -> dict[str, str]:
+    """
+    現在の Telegram 通知設定を使ってテストメッセージを送信する。<br>
+    設定が正しく動作するかどうかを確認するために使用する。<br>
+    JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されていないとアクセスできない。
+    """
+
+    cfg = Config().notification
+
+    # Telegram 通知が無効の場合はエラーを返す
+    if not cfg.telegram_notification_enabled:
+        raise HTTPException(
+            status_code = status.HTTP_400_BAD_REQUEST,
+            detail = 'Telegram notifications are not enabled. Please enable them in server settings first.',
+        )
+
+    # Bot トークンまたはチャット ID が未設定の場合はエラーを返す
+    if not cfg.telegram_bot_token or not cfg.telegram_chat_id:
+        raise HTTPException(
+            status_code = status.HTTP_400_BAD_REQUEST,
+            detail = 'Telegram bot token or chat ID is not configured.',
+        )
+
+    # テスト通知を送信する
+    success = await TelegramNotifier.sendTestNotification(
+        bot_token = cfg.telegram_bot_token,
+        chat_id = cfg.telegram_chat_id,
+    )
+    if not success:
+        raise HTTPException(
+            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail = 'Failed to send test notification. Please check your bot token and chat ID.',
+        )
+
+    return {'detail': 'Test notification sent successfully.'}

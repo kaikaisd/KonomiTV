@@ -28,6 +28,7 @@ from app.models.Series import Series
 from app.models.SeriesBroadcastPeriod import SeriesBroadcastPeriod
 from app.utils.DriveIOLimiter import DriveIOLimiter
 from app.utils.ProcessLimiter import ProcessLimiter
+from app.utils.TelegramNotifier import TelegramNotifier
 
 
 @dataclass(slots=True)
@@ -99,6 +100,9 @@ class RecordedScanTask:
     KNOWN_COLLISION_FILE_HASHES: ClassVar[set[str]] = {
         'd1dd210d6b1312cb342b56d02bd5e651',
     }
+
+    # 録画完了通知の fire-and-forget タスクを保持するセット (GC によって破棄されないようにするため)
+    _pending_notification_tasks: ClassVar[set[asyncio.Task[bool]]] = set()
 
 
     def __new__(cls) -> RecordedScanTask:
@@ -713,6 +717,57 @@ class RecordedScanTask:
                 # メタデータ解析後の最新のデータベース情報を使う
                 await self.__saveRecordedMetadataToDB(recorded_program, existing_db_recorded_video_after_analyze)
                 logging.info(f'{file_path}: {"Updated" if existing_db_recorded_video_after_analyze else "Saved"} metadata to DB. (status: {recorded_program.recorded_video.status})')
+
+                # 録画完了通知を送信する (Telegram 通知が有効な場合のみ)
+                # 録画中 (Recording) ではなく録画完了 (Recorded) になったタイミングでのみ送信する
+                # 新規保存 (existing_db_recorded_video_after_analyze is None) か、
+                # 録画中 → 録画完了に遷移したとき (status が Recording から Recorded になった) にのみ送信する
+                notification_cfg = Config().notification
+                is_newly_completed = (
+                    recorded_program.recorded_video.status == 'Recorded' and
+                    notification_cfg.telegram_notification_enabled and
+                    bool(notification_cfg.telegram_bot_token) and
+                    bool(notification_cfg.telegram_chat_id) and
+                    (
+                        existing_db_recorded_video_after_analyze is None or
+                        existing_db_recorded_video_after_analyze.status == 'Recording'
+                    )
+                )
+                if is_newly_completed:
+                    # チャンネル名を取得する (channel が紐付いていない場合もある)
+                    channel_name: str | None = None
+                    try:
+                        # select_related で channel を明示的にロードしてから name を取得する
+                        ch = await RecordedProgram.filter(id=recorded_program.id).select_related('channel').get()
+                        channel_name = ch.channel.name if ch.channel is not None else None
+                    except Exception:
+                        pass
+
+                    # 放送時刻を JST の HH:MM 形式に変換する
+                    start_jst = recorded_program.start_time.astimezone(JST)
+                    end_jst = recorded_program.end_time.astimezone(JST)
+                    start_str = start_jst.strftime('%H:%M')
+                    end_str = end_jst.strftime('%H:%M')
+                    duration_min = max(1, round(recorded_program.duration / 60))
+
+                    # asyncio.create_task() で fire-and-forget: 通知送信がスキャンループをブロックしないようにする
+                    # RUF006 対策: タスクを _pending_notification_tasks に保持して GC による破棄を防ぐ
+                    notification_task = asyncio.create_task(TelegramNotifier.sendRecordingNotification(
+                        bot_token = notification_cfg.telegram_bot_token,
+                        chat_id = notification_cfg.telegram_chat_id,
+                        title = recorded_program.title,
+                        channel_name = channel_name,
+                        start_time_jst = start_str,
+                        end_time_jst = end_str,
+                        duration_min = duration_min,
+                        description = recorded_program.description,
+                        file_size = recorded_program.recorded_video.file_size,
+                        file_hash = recorded_program.recorded_video.file_hash,
+                        recorded_program_id = recorded_program.id,
+                        base_url = notification_cfg.telegram_base_url,
+                    ))
+                    self._pending_notification_tasks.add(notification_task)
+                    notification_task.add_done_callback(self._pending_notification_tasks.discard)
 
                 # wait_background_analysis が True の場合のみ、バックグラウンド解析タスクが完了するまで待つ
                 # 録画番組メタデータ再解析 API では、API レスポンスの返却をもってメタデータ再解析が完全に完了したことをユーザーに伝える必要があるため

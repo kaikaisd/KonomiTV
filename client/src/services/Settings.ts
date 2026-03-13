@@ -130,6 +130,12 @@ export interface IServerSettings {
     capture: {
         upload_folders: string[];
     };
+    notification: {
+        telegram_notification_enabled: boolean;
+        telegram_bot_token: string;
+        telegram_chat_id: string;
+        telegram_base_url: string;
+    };
 }
 
 /* サーバー設定を表すインターフェースのデフォルト値 */
@@ -161,6 +167,12 @@ export const IServerSettingsDefault: IServerSettings = {
     },
     capture: {
         upload_folders: [],
+    },
+    notification: {
+        telegram_notification_enabled: false,
+        telegram_bot_token: '',
+        telegram_chat_id: '',
+        telegram_base_url: '',
     },
 };
 
@@ -231,6 +243,28 @@ class Settings {
         }
 
         return response.data;
+    }
+
+    /**
+     * Telegram テスト通知を送信する
+     * @return 成功した場合は true
+     */
+    static async sendTestTelegramNotification(): Promise<boolean> {
+
+        // API リクエストを実行
+        const response = await APIClient.post<{detail: string}>('/settings/notification/test');
+
+        // エラー処理
+        if (response.type === 'error') {
+            switch (response.data.detail) {
+                default:
+                    APIClient.showGenericError(response, 'テスト通知の送信に失敗しました。Bot トークンとチャット ID を確認してください。');
+                    break;
+            }
+            return false;
+        }
+
+        return true;
     }
 
     /**

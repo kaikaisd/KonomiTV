@@ -348,12 +348,23 @@ class _ServerSettingsVideo(BaseModel):
 class _ServerSettingsCapture(BaseModel):
     upload_folders: list[DirectoryPath] = []
 
+class _ServerSettingsNotification(BaseModel):
+    # Telegram 通知機能の有効/無効フラグ
+    telegram_notification_enabled: bool = False
+    # Telegram Bot トークン (@BotFather で取得)
+    telegram_bot_token: str = ''
+    # 送信先のチャット ID またはチャンネル名 (例: -1001234567890, @mychannel)
+    telegram_chat_id: str = ''
+    # KonomiTV の公開ベース URL (再生ボタンの URL 生成に使用。空文字列の場合はボタンを省略)
+    telegram_base_url: str = ''
+
 class ServerSettings(BaseModel):
     general: _ServerSettingsGeneral = _ServerSettingsGeneral()
     server: _ServerSettingsServer = _ServerSettingsServer()
     tv: _ServerSettingsTV = _ServerSettingsTV()
     video: _ServerSettingsVideo = _ServerSettingsVideo()
     capture: _ServerSettingsCapture = _ServerSettingsCapture()
+    notification: _ServerSettingsNotification = _ServerSettingsNotification()
 
 
 # サーバー設定データと読み込み・保存用の関数
