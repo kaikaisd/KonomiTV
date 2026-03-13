@@ -219,6 +219,17 @@ def Updater(version: str) -> None:
             ])
             return  # 処理中断
 
+        # origin が旧フォーク (ichigomoti/KonomiTV) を指している場合は正しい URL に更新する
+        ## 旧 URL から clone されたインストール環境では v0.13.2.mirakurun などのタグが
+        ## fetch できないため、fetch 前に必ず正しい URL へ修正する
+        RunSubprocess(
+            'Git リモート URL を確認・更新しています…',
+            ['git', 'remote', 'set-url', 'origin', 'https://github.com/kaikaisd/KonomiTV.git'],
+            cwd = update_path,
+            error_message = 'Git リモート URL の更新中に予期しないエラーが発生しました。',
+            error_log_name = 'Git のエラーログ',
+        )
+
         # リモートの変更内容とタグを取得
         result = RunSubprocess(
             'KonomiTV のソースコードを Git でダウンロードしています…',
@@ -282,9 +293,9 @@ def Updater(version: str) -> None:
         # GitHub からソースコードをダウンロード
         ## latest の場合は custom-features ブランチを、それ以外は指定されたバージョンのタグをダウンロード
         if version == 'latest':
-            source_code_response = requests.get('https://codeload.github.com/ichigomoti/KonomiTV/zip/refs/heads/custom-features')
+            source_code_response = requests.get('https://codeload.github.com/kaikaisd/KonomiTV/zip/refs/heads/custom-features')
         else:
-            source_code_response = requests.get(f'https://codeload.github.com/ichigomoti/KonomiTV/zip/refs/tags/v{version}')
+            source_code_response = requests.get(f'https://codeload.github.com/kaikaisd/KonomiTV/zip/refs/tags/v{version}')
         task_id = progress.add_task('', total=None)
 
         # ダウンロードしたデータを随時一時ファイルに書き込む
