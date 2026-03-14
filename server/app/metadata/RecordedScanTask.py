@@ -735,7 +735,9 @@ class RecordedScanTask:
                 # 録画中 (Recording) ではなく録画完了 (Recorded) になったタイミングでのみ送信する
                 # 新規保存 (existing_db_recorded_video_after_analyze is None) か、
                 # 録画中 → 録画完了に遷移したとき (status が Recording から Recorded になった) にのみ送信する
-                notification_cfg = Config().notification
+                # SaveConfig() はインメモリを更新しないため、最新設定を取得するために ReadCurrentConfig を使う
+                from app.config import ReadCurrentConfig
+                notification_cfg = ReadCurrentConfig().notification
                 is_newly_completed = (
                     recorded_program.recorded_video.status == 'Recorded' and
                     notification_cfg.telegram_notification_enabled and
@@ -746,6 +748,17 @@ class RecordedScanTask:
                         existing_db_recorded_video_after_analyze.status == 'Recording'
                     )
                 )
+                # MirakurunRecordingTask が録画したファイルは、バックグラウンド解析完了後に
+                # MirakurunRecordingTask._sendCompletionNotification がサムネイル付き通知を送信するため、
+                # ここでの早期通知 (サムネイルなし) は送信しない
+                if is_newly_completed:
+                    from app.models.MirakurunReservation import MirakurunReservation
+                    mirakurun_reservation = await MirakurunReservation.get_or_none(
+                        recording_file_path = file_path_str,
+                        status = 'Completed',
+                    )
+                    if mirakurun_reservation is not None:
+                        is_newly_completed = False
                 if is_newly_completed:
                     # チャンネル名を取得する (channel が紐付いていない場合もある)
                     channel_name: str | None = None

@@ -217,19 +217,23 @@ class MirakurunRecordingTask:
         # ファイル名を構築: {title}_{YYYYMMDD_HHMMSS}_{channel_name}.m2ts
         safe_title = _sanitizeFilename(reservation.title)
         start_str = reservation.start_time.astimezone(JST).strftime('%Y%m%d_%H%M%S')
-        channel_name = ''
+        # channel_name_display: 通知メッセージに使用するチャンネル名 (サニタイズ済み、先頭の _ なし)
+        # channel_name_suffix: ファイル名に使用するチャンネル名 (先頭に _ を付与)
+        channel_name_display = ''
+        channel_name_suffix = ''
         if reservation.channel_id:
             from app.models.Channel import Channel
             channel = await Channel.get_or_none(id=reservation.channel_id)
             if channel:
-                channel_name = '_' + _sanitizeFilename(channel.name)
-        file_name = f'{safe_title}_{start_str}{channel_name}.m2ts'
+                channel_name_display = _sanitizeFilename(channel.name)
+                channel_name_suffix = '_' + channel_name_display
+        file_name = f'{safe_title}_{start_str}{channel_name_suffix}.m2ts'
         output_path = output_dir / file_name
 
         # 同名ファイルが既に存在する場合は連番サフィックスを付与する
         counter = 1
         while output_path.exists():
-            output_path = output_dir / f'{safe_title}_{start_str}{channel_name}_{counter}.m2ts'
+            output_path = output_dir / f'{safe_title}_{start_str}{channel_name_suffix}_{counter}.m2ts'
             counter += 1
 
         # Mirakurun 形式のサービス ID を計算
@@ -317,7 +321,7 @@ class MirakurunRecordingTask:
                 self._sendCompletionNotification(
                     reservation_id = reservation_id,
                     title = reservation.title,
-                    channel_name = channel_name or None,
+                    channel_name = channel_name_display or None,
                     start_time = reservation.start_time,
                     end_time = reservation.end_time,
                     description = reservation.description,
@@ -393,76 +397,100 @@ class MirakurunRecordingTask:
         if not cfg.telegram_notification_enabled or not cfg.telegram_bot_token or not cfg.telegram_chat_id:
             return
 
-        # RecordedVideo レコードが DB に登録され、全バックグラウンド解析が完了するのを待つ
-        # バックグラウンド解析は KeyFrameAnalyzer / CMSectionsDetector / ThumbnailGenerator の
-        # 3 タスクを asyncio.gather で並列実行し、最も時間のかかるキーフレーム解析が終わると全完了する。
-        # それぞれの完了指標:
-        #   key_frames が非空     → キーフレーム解析完了 (最も遅い: 録画長に依存、数分かかることがある)
-        #   cm_sections is not None → CM 区間検出完了 (高速)
-        #   thumbnail_info is not None → サムネイル生成完了 (中程度)
-        # 全解析完了の主判定として key_frames 非空を使い、
-        # キーフレーム解析失敗時のフォールバックとして thumbnail_info の設定有無を確認する。
-        # 最大 600 秒 (10 分) まで 5 秒ごとにポーリングする。
-        from app.models.RecordedVideo import RecordedVideo
-        POLL_INTERVAL_SECONDS = 5
-        MAX_POLLS = 120  # 5 秒 × 120 = 600 秒
-        file_hash = ''
-        recorded_program_id = 0
+        try:
+            # RecordedVideo レコードが DB に登録され、全バックグラウンド解析が完了するのを待つ
+            # バックグラウンド解析は KeyFrameAnalyzer / CMSectionsDetector / ThumbnailGenerator の
+            # 3 タスクを asyncio.gather で並列実行し、最も時間のかかるキーフレーム解析が終わると全完了する。
+            # それぞれの完了指標:
+            #   key_frames が非空     → キーフレーム解析完了 (最も遅い: 録画長に依存、数分かかることがある)
+            #   cm_sections is not None → CM 区間検出完了 (高速)
+            #   thumbnail_info is not None → サムネイル生成完了 (中程度)
+            # 全解析完了の主判定として key_frames 非空を使い、
+            # キーフレーム解析失敗時のフォールバックとして thumbnail_info の設定有無を確認する。
+            # 最大 600 秒 (10 分) まで 5 秒ごとにポーリングする。
+            import anyio as _anyio
 
-        for _ in range(MAX_POLLS):
-            await asyncio.sleep(POLL_INTERVAL_SECONDS)
-            recorded_video = await RecordedVideo.get_or_none(file_path=str(output_path))
-            if recorded_video is not None:
-                file_hash = recorded_video.file_hash
-                recorded_program_id = recorded_video.recorded_program_id
-                # 全バックグラウンド解析完了の確認:
-                # キーフレームが設定済み (主判定) か、キーフレーム解析が失敗した場合のフォールバックとして
-                # サムネイル情報が DB に保存済みであれば全解析完了とみなす
-                all_analysis_done = (
-                    len(recorded_video.key_frames) > 0 or
-                    recorded_video.thumbnail_info is not None
-                )
-                if all_analysis_done:
-                    logging.info(
-                        f'MirakurunRecordingTask: Background analysis completed for reservation_id={reservation_id}, '
-                        'sending notification.'
+            from app.models.RecordedVideo import RecordedVideo
+            POLL_INTERVAL_SECONDS = 5
+            MAX_POLLS = 120  # 5 秒 × 120 = 600 秒
+            file_hash = ''
+            recorded_program_id = 0
+
+            # RecordedScanTask は resolveRecordedPath() でシンボリックリンクを解決したパスを DB に保存する。
+            # Config() から得た output_path が未解決パスの場合でも一致するよう、解決済みパスも候補に加える。
+            output_path_str = str(output_path)
+            try:
+                resolved_path_str = str(await _anyio.Path(output_path_str).resolve())
+            except Exception:
+                resolved_path_str = output_path_str
+
+            for _ in range(MAX_POLLS):
+                await asyncio.sleep(POLL_INTERVAL_SECONDS)
+                # まず元のパスで検索し、見つからなければ解決済みパスで再検索する
+                recorded_video = await RecordedVideo.get_or_none(file_path=output_path_str)
+                if recorded_video is None and resolved_path_str != output_path_str:
+                    recorded_video = await RecordedVideo.get_or_none(file_path=resolved_path_str)
+                if recorded_video is not None:
+                    file_hash = recorded_video.file_hash
+                    recorded_program_id = recorded_video.recorded_program_id
+                    # 全バックグラウンド解析完了の確認:
+                    # キーフレームが設定済み (主判定) か、キーフレーム解析が失敗した場合のフォールバックとして
+                    # サムネイル情報が DB に保存済みであれば全解析完了とみなす
+                    all_analysis_done = (
+                        len(recorded_video.key_frames) > 0 or
+                        recorded_video.thumbnail_info is not None
                     )
-                    break
-        else:
-            # タイムアウト: 解析が終わらなくてもサムネイルの有無に応じて通知を送信する
-            logging.warning(
-                f'MirakurunRecordingTask: Timed out waiting for background analysis for '
-                f'reservation_id={reservation_id}. Sending notification with available data.'
+                    if all_analysis_done:
+                        logging.info(
+                            f'MirakurunRecordingTask: Background analysis completed for reservation_id={reservation_id}, '
+                            'sending notification.'
+                        )
+                        break
+            else:
+                # タイムアウト: 解析が終わらなくてもサムネイルの有無に応じて通知を送信する
+                logging.warning(
+                    f'MirakurunRecordingTask: Timed out waiting for background analysis for '
+                    f'reservation_id={reservation_id}. Sending notification with available data.'
+                )
+
+            # ファイルサイズを取得する (録画完了後にファイルが存在すれば stat で取得、なければ書き込みバイト数を使う)
+            file_size = bytes_written
+            try:
+                if output_path.exists():
+                    file_size = output_path.stat().st_size
+            except OSError:
+                pass
+
+            # 放送時間を HH:MM 形式でフォーマット
+            start_str = start_time.astimezone(JST).strftime('%H:%M')
+            end_str = end_time.astimezone(JST).strftime('%H:%M')
+            duration_min = max(1, int((end_time - start_time).total_seconds() / 60))
+
+            # Telegram 通知を送信する
+            await TelegramNotifier.sendRecordingNotification(
+                bot_token = cfg.telegram_bot_token,
+                chat_id = cfg.telegram_chat_id,
+                title = title,
+                channel_name = channel_name,
+                start_time_jst = start_str,
+                end_time_jst = end_str,
+                duration_min = duration_min,
+                description = description,
+                file_size = file_size,
+                file_hash = file_hash,
+                recorded_program_id = recorded_program_id,
+                base_url = cfg.telegram_base_url,
             )
 
-        # ファイルサイズを取得する (録画完了後にファイルが存在すれば stat で取得、なければ書き込みバイト数を使う)
-        file_size = bytes_written
-        try:
-            if output_path.exists():
-                file_size = output_path.stat().st_size
-        except OSError:
-            pass
-
-        # 放送時間を HH:MM 形式でフォーマット
-        start_str = start_time.astimezone(JST).strftime('%H:%M')
-        end_str = end_time.astimezone(JST).strftime('%H:%M')
-        duration_min = max(1, int((end_time - start_time).total_seconds() / 60))
-
-        # Telegram 通知を送信する
-        await TelegramNotifier.sendRecordingNotification(
-            bot_token = cfg.telegram_bot_token,
-            chat_id = cfg.telegram_chat_id,
-            title = title,
-            channel_name = channel_name,
-            start_time_jst = start_str,
-            end_time_jst = end_str,
-            duration_min = duration_min,
-            description = description,
-            file_size = file_size,
-            file_hash = file_hash,
-            recorded_program_id = recorded_program_id,
-            base_url = cfg.telegram_base_url,
-        )
+        except asyncio.CancelledError:
+            # サーバーシャットダウン時など: キャンセルは再送出して asyncio に伝える
+            raise
+        except Exception:
+            logging.error(
+                f'MirakurunRecordingTask: Unexpected error in _sendCompletionNotification '
+                f'for reservation_id={reservation_id}.',
+                exc_info=True,
+            )
 
     @classmethod
     def isRecording(cls, reservation_id: int) -> bool:
