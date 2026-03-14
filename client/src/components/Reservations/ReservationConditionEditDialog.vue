@@ -45,19 +45,31 @@
                 <!-- チャンネル選択 -->
                 <div class="condition-edit-dialog__section-title mb-1">対象チャンネル</div>
                 <div class="condition-edit-dialog__section-hint mb-2">
-                    選択なしの場合はすべてのチャンネルが対象になります。
+                    選択なしの場合はすべてのチャンネルが対象になります。グループをクリックすると一括選択、個別チャンネルをクリックすると個別選択できます。
                 </div>
                 <div v-if="isChannelsLoading" class="mb-3">
                     <v-progress-circular indeterminate color="primary" size="20" />
                 </div>
                 <div v-else class="mb-3">
+                    <!-- タイプ別一括選択チップ -->
                     <v-chip v-for="type in availableChannelTypes" :key="type"
-                        :color="selectedChannelTypes.includes(type) ? 'primary' : 'default'"
-                        :variant="selectedChannelTypes.includes(type) ? 'flat' : 'outlined'"
-                        class="mr-1 mb-1" @click="toggleChannelType(type)" style="cursor: pointer;">
+                        :color="isTypePartiallySelected(type) ? 'primary' : 'default'"
+                        :variant="isTypeFullySelected(type) ? 'flat' : isTypePartiallySelected(type) ? 'tonal' : 'outlined'"
+                        class="mr-1 mb-2" @click="toggleChannelType(type)" style="cursor: pointer;">
                         {{ channelTypeLabel(type) }}
-                        <span class="condition-edit-dialog__chip-count">{{ channelsList[type].length }}</span>
+                        <span class="condition-edit-dialog__chip-count">{{ channelsList[type].filter(c => !c.is_radiochannel).length }}</span>
                     </v-chip>
+                    <!-- 個別チャンネル選択チップ -->
+                    <div class="condition-edit-dialog__channel-list">
+                        <template v-for="type in availableChannelTypes" :key="type">
+                            <v-chip v-for="ch in channelsList[type].filter(c => !c.is_radiochannel)" :key="channelKey(ch)"
+                                :color="isChannelSelected(ch) ? 'primary' : 'default'"
+                                :variant="isChannelSelected(ch) ? 'flat' : 'outlined'"
+                                size="small" class="mr-1 mb-1" @click="toggleChannel(ch)" style="cursor: pointer;">
+                                {{ ch.name }}
+                            </v-chip>
+                        </template>
+                    </div>
                 </div>
 
                 <v-divider class="mb-4" />
@@ -303,15 +315,56 @@ function channelTypeLabel(type: ChannelType): string {
     return CHANNEL_TYPE_LABELS[type];
 }
 
-// 選択中のチャンネルタイプ (UI 専用状態; service_ranges には save/preview 時のみ変換)
-const selectedChannelTypes = ref<ChannelType[]>([]);
+// 個別チャンネルの一意キー: "{network_id}_{service_id}"
+function channelKey(ch: { network_id: number; service_id: number }): string {
+    return `${ch.network_id}_${ch.service_id}`;
+}
 
+// 選択中のチャンネルを個別 ID (network_id_service_id) のセットで管理する (UI 専用状態)
+// タイプ単位の一括選択も個別選択も、全てここに集約して service_ranges に変換する
+const selectedChannelIds = ref<string[]>([]);
+
+// 指定チャンネルが選択中かどうか
+function isChannelSelected(ch: { network_id: number; service_id: number }): boolean {
+    return selectedChannelIds.value.includes(channelKey(ch));
+}
+
+// タイプ内の全非ラジオチャンネルが全て選択中かどうか
+function isTypeFullySelected(type: ChannelType): boolean {
+    const chs = channelsList.value[type].filter(c => !c.is_radiochannel);
+    return chs.length > 0 && chs.every(ch => isChannelSelected(ch));
+}
+
+// タイプ内に1つ以上選択中のチャンネルがあるかどうか (部分選択・全選択 両方 true)
+function isTypePartiallySelected(type: ChannelType): boolean {
+    return channelsList.value[type].some(ch => !ch.is_radiochannel && isChannelSelected(ch));
+}
+
+// タイプチップをクリック: 全選択 ↔ 全解除 のトグル
 function toggleChannelType(type: ChannelType): void {
-    const idx = selectedChannelTypes.value.indexOf(type);
-    if (idx >= 0) {
-        selectedChannelTypes.value.splice(idx, 1);
+    const chs = channelsList.value[type].filter(c => !c.is_radiochannel);
+    if (isTypeFullySelected(type)) {
+        // 全選択 → 全解除
+        const removeKeys = new Set(chs.map(channelKey));
+        selectedChannelIds.value = selectedChannelIds.value.filter(id => !removeKeys.has(id));
     } else {
-        selectedChannelTypes.value.push(type);
+        // 部分選択 or 未選択 → 全選択 (重複なし)
+        const existing = new Set(selectedChannelIds.value);
+        for (const ch of chs) {
+            existing.add(channelKey(ch));
+        }
+        selectedChannelIds.value = [...existing];
+    }
+}
+
+// 個別チャンネルチップをクリック: 選択 ↔ 解除 のトグル
+function toggleChannel(ch: { network_id: number; service_id: number }): void {
+    const key = channelKey(ch);
+    const idx = selectedChannelIds.value.indexOf(key);
+    if (idx >= 0) {
+        selectedChannelIds.value.splice(idx, 1);
+    } else {
+        selectedChannelIds.value.push(key);
     }
 }
 
@@ -398,14 +451,15 @@ async function previewSearch(): Promise<void> {
 function buildSearchCondition(): IProgramSearchCondition {
     const condition: IProgramSearchCondition = { ...form.value };
 
-    // チャンネルタイプ → service_ranges (選択タイプに属する全チャンネルの service 情報を列挙)
-    if (selectedChannelTypes.value.length === 0) {
+    // 選択中の個別チャンネル ID → service_ranges
+    if (selectedChannelIds.value.length === 0) {
         condition.service_ranges = null;
     } else {
+        const selectedSet = new Set(selectedChannelIds.value);
         const ranges: IProgramSearchConditionService[] = [];
-        for (const type of selectedChannelTypes.value) {
+        for (const type of availableChannelTypes.value) {
             for (const ch of channelsList.value[type]) {
-                if (!ch.is_radiochannel) {
+                if (!ch.is_radiochannel && selectedSet.has(channelKey(ch))) {
                     ranges.push({
                         network_id: ch.network_id,
                         transport_stream_id: ch.transport_stream_id ?? 0,
@@ -451,21 +505,21 @@ function buildSearchCondition(): IProgramSearchCondition {
 // ============================================================
 
 function deriveUiStateFromForm(): void {
-    // チャンネルタイプを service_ranges から逆引き
+    // service_ranges から個別チャンネル ID を復元
     if (!form.value.service_ranges || form.value.service_ranges.length === 0) {
-        selectedChannelTypes.value = [];
+        selectedChannelIds.value = [];
     } else {
-        const types: ChannelType[] = [];
+        const ids: string[] = [];
         for (const type of (['GR', 'BS', 'CS', 'CATV', 'SKY', 'BS4K'] as ChannelType[])) {
-            if (channelsList.value[type].some(ch =>
-                form.value.service_ranges!.some(s =>
+            for (const ch of channelsList.value[type]) {
+                if (!ch.is_radiochannel && form.value.service_ranges.some(s =>
                     s.network_id === ch.network_id && s.service_id === ch.service_id,
-                ),
-            )) {
-                types.push(type);
+                )) {
+                    ids.push(channelKey(ch));
+                }
             }
         }
-        selectedChannelTypes.value = types;
+        selectedChannelIds.value = ids;
     }
 
     // ジャンルを genre_ranges から復元
@@ -628,6 +682,12 @@ async function save() {
         font-size: 0.75rem;
         opacity: 0.7;
         margin-left: 4px;
+    }
+
+    &__channel-list {
+        padding-top: 4px;
+        border-top: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+        margin-top: 4px;
     }
 
     &__priority-label {

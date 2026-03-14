@@ -10,6 +10,25 @@
                         { name: 'ホーム', path: '/' },
                         { name: 'ビデオをみる', path: '/videos/', disabled: true },
                     ]" />
+                    <div v-if="storage_info && storage_info.folders.length > 0" class="storage-bar-section">
+                        <div v-for="folder in storage_info.folders" :key="folder.paths[0]" class="storage-bar">
+                            <div class="storage-bar__header">
+                                <span class="storage-bar__label">
+                                    <Icon icon="fluent:storage-20-regular" width="15px" class="mr-1" />
+                                    {{ folder.paths.join('  /  ') }}
+                                </span>
+                                <span class="storage-bar__usage">
+                                    {{ formatBytes(folder.used_bytes) }} / {{ formatBytes(folder.total_bytes) }} ({{ Math.round(folder.used_bytes / folder.total_bytes * 100) }}%)
+                                </span>
+                            </div>
+                            <v-progress-linear
+                                :model-value="folder.used_bytes / folder.total_bytes * 100"
+                                :color="storageUsageColor(folder.used_bytes / folder.total_bytes)"
+                                bg-color="background-lighten-2"
+                                rounded
+                                height="5" />
+                        </div>
+                    </div>
                     <RecordedProgramList
                         class="videos-home-container__recent-programs"
                         :class="{'videos-home-container__recent-programs--loading': recent_programs.length === 0 && is_loading}"
@@ -119,11 +138,27 @@ import Navigation from '@/components/Navigation.vue';
 import SPHeaderBar from '@/components/SPHeaderBar.vue';
 import RecordedProgramList from '@/components/Videos/RecordedProgramList.vue';
 import SeriesService, { ISeries } from '@/services/Series';
-import { IRecordedProgram } from '@/services/Videos';
+import { IRecordedProgram, IStorageInfo } from '@/services/Videos';
 import Videos from '@/services/Videos';
 import useSettingsStore from '@/stores/SettingsStore';
 import useUserStore from '@/stores/UserStore';
 import Utils from '@/utils';
+
+// ストレージ情報
+const storage_info = ref<IStorageInfo | null>(null);
+
+// バイト数を人間が読みやすい形式 (GB / MB) に変換する
+const formatBytes = (bytes: number): string => {
+    if (bytes >= 1024 ** 3) return (bytes / 1024 ** 3).toFixed(1) + ' GB';
+    return (bytes / 1024 ** 2).toFixed(0) + ' MB';
+};
+
+// ストレージ使用率に応じた色を返す (90%以上: エラー赤、75%以上: 警告黄、それ以下: プライマリ)
+const storageUsageColor = (ratio: number): string => {
+    if (ratio >= 0.9) return 'error';
+    if (ratio >= 0.75) return 'warning';
+    return 'primary';
+};
 
 // 最近録画された番組のリスト
 const recent_programs = ref<IRecordedProgram[]>([]);
@@ -254,8 +289,13 @@ const sectionUpdaters = {
 // 全セクションの更新を実行
 const updateAllSections = async () => {
     try {
-        // 全セクションの更新関数を実行
-        await Promise.all(Object.values(sectionUpdaters).map(updater => updater()));
+        // 全セクションの更新関数とストレージ情報の取得を並行実行
+        const results = await Promise.all([
+            ...Object.values(sectionUpdaters).map(updater => updater()),
+            Videos.fetchStorageInfo(),
+        ]);
+        // fetchStorageInfo の結果は配列の最後の要素
+        storage_info.value = results[results.length - 1] as IStorageInfo | null;
         is_loading.value = false;
     } catch (error) {
         console.error('Failed to update sections:', error);
@@ -342,6 +382,39 @@ onUnmounted(() => {
                 height: calc(100px * 10);
             }
         }
+    }
+}
+
+.storage-bar-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.storage-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    &__header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.82rem;
+        color: rgb(var(--v-theme-text-darken-1));
+    }
+    &__label {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+    }
+    &__usage {
+        flex-shrink: 0;
+        font-variant-numeric: tabular-nums;
     }
 }
 
