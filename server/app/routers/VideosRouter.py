@@ -1,6 +1,7 @@
 
 import json
 import pathlib
+import shutil
 from email.utils import parsedate
 from typing import Annotated, Any, Literal
 
@@ -20,6 +21,7 @@ from starlette.datastructures import Headers
 from tortoise import connections
 
 from app import logging, schemas
+from app.config import Config
 from app.constants import STATIC_DIR, THUMBNAILS_DIR
 from app.metadata.RecordedScanTask import RecordedScanTask
 from app.metadata.ThumbnailGenerator import ThumbnailGenerator
@@ -309,6 +311,42 @@ async def GetThumbnailResponse(
         )
 
     return response
+
+
+@router.get(
+    '/storage',
+    summary = '録画ストレージ情報 API',
+    response_description = '録画フォルダのディスクごとのストレージ使用状況。',
+    response_model = schemas.StorageInfo,
+)
+async def VideoStorageAPI() -> schemas.StorageInfo:
+    """
+    設定された録画フォルダのディスクストレージ使用状況を返す。<br>
+    同一ディスク (デバイス) 上に複数の録画フォルダが存在する場合は 1 エントリにまとめる。<br>
+    アクセスできないフォルダは結果から除外される。
+    """
+
+    # ディスクデバイス ID をキーにして重複排除する
+    # st_dev はクロスプラットフォームで動作する (Windows: ドライブ番号、Linux: inode デバイス番号)
+    seen_devs: dict[int, schemas.FolderStorageInfo] = {}
+    for folder in Config().video.recorded_folders:
+        try:
+            dev = pathlib.Path(str(folder)).stat().st_dev
+            if dev not in seen_devs:
+                usage = shutil.disk_usage(str(folder))
+                seen_devs[dev] = schemas.FolderStorageInfo(
+                    paths = [str(folder)],
+                    total_bytes = usage.total,
+                    used_bytes = usage.used,
+                    free_bytes = usage.free,
+                )
+            else:
+                # 同一ディスク上の追加フォルダはパスリストに追加するだけ
+                seen_devs[dev].paths.append(str(folder))
+        except OSError:
+            pass
+
+    return schemas.StorageInfo(folders=list(seen_devs.values()))
 
 
 @router.get(

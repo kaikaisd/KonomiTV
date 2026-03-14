@@ -170,6 +170,24 @@ export interface IRecordedPrograms {
     recorded_programs: IRecordedProgram[];
 }
 
+/** ディスクごとのストレージ使用状況を表すインターフェース */
+export interface IFolderStorageInfo {
+    /** 同一ディスク上にある録画フォルダのパス一覧 */
+    paths: string[];
+    /** ディスクの合計容量 (バイト) */
+    total_bytes: number;
+    /** ディスクの使用済み容量 (バイト) */
+    used_bytes: number;
+    /** ディスクの空き容量 (バイト) */
+    free_bytes: number;
+}
+
+/** 録画ストレージ情報を表すインターフェース */
+export interface IStorageInfo {
+    /** 録画フォルダのディスクごとのストレージ使用状況 */
+    folders: IFolderStorageInfo[];
+}
+
 /** 過去ログコメントを表すインターフェース */
 export interface IJikkyoComment {
     time: number;
@@ -351,6 +369,17 @@ class Videos {
 
         return true;
     }
+
+    /**
+     * 録画フォルダのストレージ使用状況を取得する
+     * @returns ディスクごとのストレージ使用状況 or 取得に失敗した場合は null
+     */
+    static async fetchStorageInfo(): Promise<IStorageInfo | null> {
+        const response = await APIClient.get<IStorageInfo>('/videos/storage');
+        if (response.type === 'error') return null;
+        return response.data;
+    }
+
 
     /**
      * 録画番組を削除する

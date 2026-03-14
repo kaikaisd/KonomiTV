@@ -11,6 +11,25 @@
                         { name: 'ビデオをみる', path: '/videos/' },
                         { name: '録画番組一覧', path: '/videos/programs', disabled: true },
                     ]" />
+                    <div v-if="storage_info && storage_info.folders.length > 0" class="storage-bar-section">
+                        <div v-for="folder in storage_info.folders" :key="folder.paths[0]" class="storage-bar">
+                            <div class="storage-bar__header">
+                                <span class="storage-bar__label">
+                                    <Icon icon="fluent:storage-20-regular" width="15px" class="mr-1" />
+                                    {{ folder.paths.join('  /  ') }}
+                                </span>
+                                <span class="storage-bar__usage">
+                                    {{ formatBytes(folder.used_bytes) }} / {{ formatBytes(folder.total_bytes) }} ({{ Math.round(folder.used_bytes / folder.total_bytes * 100) }}%)
+                                </span>
+                            </div>
+                            <v-progress-linear
+                                :model-value="folder.used_bytes / folder.total_bytes * 100"
+                                :color="storageUsageColor(folder.used_bytes / folder.total_bytes)"
+                                bg-color="background-lighten-2"
+                                rounded
+                                height="5" />
+                        </div>
+                    </div>
                     <RecordedProgramList
                         title="録画番組一覧"
                         :programs="programs"
@@ -37,7 +56,7 @@ import HeaderBar from '@/components/HeaderBar.vue';
 import Navigation from '@/components/Navigation.vue';
 import SPHeaderBar from '@/components/SPHeaderBar.vue';
 import RecordedProgramList from '@/components/Videos/RecordedProgramList.vue';
-import { IRecordedProgram, SortOrder } from '@/services/Videos';
+import { IRecordedProgram, IStorageInfo, SortOrder } from '@/services/Videos';
 import Videos from '@/services/Videos';
 import useUserStore from '@/stores/UserStore';
 
@@ -50,11 +69,27 @@ const programs = ref<IRecordedProgram[]>([]);
 const total_programs = ref(0);
 const is_loading = ref(true);
 
+// ストレージ情報
+const storage_info = ref<IStorageInfo | null>(null);
+
 // 現在のページ番号
 const current_page = ref(1);
 
 // 並び順
 const sort_order = ref<'desc' | 'asc'>('desc');
+
+// バイト数を人間が読みやすい形式 (GB / MB) に変換する
+const formatBytes = (bytes: number): string => {
+    if (bytes >= 1024 ** 3) return (bytes / 1024 ** 3).toFixed(1) + ' GB';
+    return (bytes / 1024 ** 2).toFixed(0) + ' MB';
+};
+
+// ストレージ使用率に応じた色を返す (90%以上: エラー赤、75%以上: 警告黄、それ以下: プライマリ)
+const storageUsageColor = (ratio: number): string => {
+    if (ratio >= 0.9) return 'error';
+    if (ratio >= 0.75) return 'warning';
+    return 'primary';
+};
 
 // 録画番組を取得
 const fetchPrograms = async () => {
@@ -119,8 +154,12 @@ onMounted(async () => {
         sort_order.value = route.query.order as 'desc' | 'asc';
     }
 
-    // 録画番組を取得
-    await fetchPrograms();
+    // 録画番組とストレージ情報を並行して取得
+    const [, storage_result] = await Promise.all([
+        fetchPrograms(),
+        Videos.fetchStorageInfo(),
+    ]);
+    storage_info.value = storage_result;
 });
 
 </script>
@@ -150,6 +189,39 @@ onMounted(async () => {
     @include smartphone-vertical {
         padding: 16px 8px !important;
         padding-top: 8px !important;
+    }
+}
+
+.storage-bar-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.storage-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    &__header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.82rem;
+        color: rgb(var(--v-theme-text-darken-1));
+    }
+    &__label {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+    }
+    &__usage {
+        flex-shrink: 0;
+        font-variant-numeric: tabular-nums;
     }
 }
 

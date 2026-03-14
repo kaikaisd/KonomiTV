@@ -239,6 +239,22 @@ class RecordedPrograms(BaseModel):
     total: int
     recorded_programs: list[RecordedProgram]
 
+# ***** ストレージ情報 *****
+
+class FolderStorageInfo(BaseModel):
+    # 同一ディスク上にある録画フォルダのパス一覧 (複数フォルダが同じディスクに存在する場合にまとめて表示するため)
+    paths: list[str]
+    # ディスクの合計容量 (バイト)
+    total_bytes: int
+    # ディスクの使用済み容量 (バイト)
+    used_bytes: int
+    # ディスクの空き容量 (バイト)
+    free_bytes: int
+
+class StorageInfo(BaseModel):
+    # 録画フォルダのディスクごとのストレージ使用状況 (同一ディスク上のフォルダはまとめて 1 エントリ)
+    folders: list[FolderStorageInfo]
+
 # ***** シリーズ *****
 
 class Series(PydanticModel):

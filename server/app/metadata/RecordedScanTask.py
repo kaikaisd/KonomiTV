@@ -6,7 +6,7 @@ import concurrent.futures
 import pathlib
 from dataclasses import dataclass
 from datetime import datetime
-from typing import ClassVar, Literal, cast
+from typing import Any, ClassVar, Literal, cast
 
 import anyio
 from fastapi import HTTPException, status
@@ -102,7 +102,8 @@ class RecordedScanTask:
     }
 
     # 録画完了通知の fire-and-forget タスクを保持するセット (GC によって破棄されないようにするため)
-    _pending_notification_tasks: ClassVar[set[asyncio.Task[bool]]] = set()
+    # Task[bool] (sendRecordingNotification の直接タスク) と Task[None] (ラッパーコルーチン) の両方を保持するため Any で型付けする
+    _pending_notification_tasks: ClassVar[set[asyncio.Task[Any]]] = set()
 
 
     def __new__(cls) -> RecordedScanTask:
@@ -777,21 +778,47 @@ class RecordedScanTask:
                     duration_min = max(1, round(recorded_program.duration / 60))
 
                     # asyncio.create_task() で fire-and-forget: 通知送信がスキャンループをブロックしないようにする
+                    # バックグラウンド解析 (ThumbnailGenerator 含む) の完了を待ってからサムネイル付き通知を送信するため、
+                    # ラッパーコルーチン内で _background_tasks に登録された解析タスクを await してから送信する
                     # RUF006 対策: タスクを _pending_notification_tasks に保持して GC による破棄を防ぐ
-                    notification_task = asyncio.create_task(TelegramNotifier.sendRecordingNotification(
-                        bot_token = notification_cfg.telegram_bot_token,
-                        chat_id = notification_cfg.telegram_chat_id,
-                        title = recorded_program.title,
-                        channel_name = channel_name,
-                        start_time_jst = start_str,
-                        end_time_jst = end_str,
-                        duration_min = duration_min,
-                        description = recorded_program.description,
-                        file_size = recorded_program.recorded_video.file_size,
-                        file_hash = recorded_program.recorded_video.file_hash,
-                        recorded_program_id = recorded_program.id,
-                        base_url = notification_cfg.telegram_base_url,
-                    ))
+                    _bg_task = self._background_tasks.get(file_path)
+                    _notify_bot_token = notification_cfg.telegram_bot_token
+                    _notify_chat_id = notification_cfg.telegram_chat_id
+                    _notify_title = recorded_program.title
+                    _notify_channel_name = channel_name
+                    _notify_start_str = start_str
+                    _notify_end_str = end_str
+                    _notify_duration_min = duration_min
+                    _notify_description = recorded_program.description
+                    _notify_file_size = recorded_program.recorded_video.file_size
+                    _notify_file_hash = recorded_program.recorded_video.file_hash
+                    _notify_program_id = recorded_program.id
+                    _notify_base_url = notification_cfg.telegram_base_url
+
+                    async def _notify_after_analysis() -> None:
+                        # バックグラウンド解析完了後に通知を送信する
+                        # バックグラウンド解析タスクが存在する場合は完了を待機し、失敗してもサムネイルなしで通知を送信する
+                        if _bg_task is not None and not _bg_task.done():
+                            try:
+                                await _bg_task
+                            except Exception:
+                                pass
+                        await TelegramNotifier.sendRecordingNotification(
+                            bot_token = _notify_bot_token,
+                            chat_id = _notify_chat_id,
+                            title = _notify_title,
+                            channel_name = _notify_channel_name,
+                            start_time_jst = _notify_start_str,
+                            end_time_jst = _notify_end_str,
+                            duration_min = _notify_duration_min,
+                            description = _notify_description,
+                            file_size = _notify_file_size,
+                            file_hash = _notify_file_hash,
+                            recorded_program_id = _notify_program_id,
+                            base_url = _notify_base_url,
+                        )
+
+                    notification_task = asyncio.create_task(_notify_after_analysis())
                     self._pending_notification_tasks.add(notification_task)
                     notification_task.add_done_callback(self._pending_notification_tasks.discard)
 
