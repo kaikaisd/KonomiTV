@@ -87,7 +87,7 @@
                         <span v-if="!iconOnly" class="navigation__link-text">CF Accessからログアウト</span>
                     </a>
                     <a v-ripple class="navigation__link" active-class="navigation__link--active"
-                        href="https://github.com/tsukumijima/KonomiTV" target="_blank"
+                        href="https://github.com/kaikaisd/KonomiTV" target="_blank"
                         :class="{
                             'navigation__link--develop-version': versionStore.is_client_develop_version,
                             'navigation__link--highlight': versionStore.is_update_available,

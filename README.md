@@ -1,12 +1,14 @@
 # 本フォクについて
 
-このフォクは [本家 KonomiTV](https://github.com/tsukumijima/KonomiTV)　と　[ichigomoti](https://github.com/ichigomoti)　をベースに、l3tnun様　の[EPGStation](https://github.com/l3tnun/EPGStation)　使用したのMirakurun録画ロジックをKononiTVに追加しました。
+このフォクは [本家 KonomiTV](https://github.com/tsukumijima/KonomiTV)と[ichigomoti](https://github.com/ichigomoti)をベースに、l3tnun様の[EPGStation](https://github.com/l3tnun/EPGStation)使用したのMirakurun録画ロジックをKononiTVに追加しました。
+
+あと、Telegarm録画完了メッセージ機能か実装されました、Telegram　Botを利用し、録画完了のどき通じております。
 
 ほとんどClaude Codeに作らせています(このREADME.mdも)、そのためバグも多くあります。インストールされる際はバックアップを取ることを強く推奨します。
 
 なの、問題が発生しましたら、issueを呈してください。
 
-作者の日本語レベルは有限ですので、でくれば英語を説明してください。
+作者の日本語レベルは有限ですので、できれば英語を説明してください。
 
 何卒宜しくお願い致します。
 
