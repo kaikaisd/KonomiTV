@@ -5,7 +5,7 @@ import asyncio
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import ClassVar
+from typing import IO, ClassVar
 
 import aiohttp
 
@@ -231,10 +231,18 @@ class MirakurunRecordingTask:
         output_path = output_dir / file_name
 
         # 同名ファイルが既に存在する場合は連番サフィックスを付与する
+        # open() を 'xb' (排他的作成) モードで使い、存在チェックとファイル作成をアトミックに行う
+        # これにより、別の録画ソフト (EPGStation など) が同時に同じ名前のファイルを作成した場合でも
+        # KonomiTV が既存ファイルを破壊 (truncate) するのを防ぐ
         counter = 1
-        while output_path.exists():
-            output_path = output_dir / f'{safe_title}_{start_str}{channel_name_suffix}_{counter}.m2ts'
-            counter += 1
+        output_file: IO[bytes] | None = None
+        while output_file is None:
+            try:
+                # 'xb': ファイルが存在しない場合のみ作成 (存在すれば FileExistsError)
+                output_file = open(output_path, 'xb')
+            except FileExistsError:
+                output_path = output_dir / f'{safe_title}_{start_str}{channel_name_suffix}_{counter}.m2ts'
+                counter += 1
 
         # Mirakurun 形式のサービス ID を計算
         mirakurun_service_id = reservation.getMirakurunServiceId()
@@ -267,6 +275,12 @@ class MirakurunRecordingTask:
                     f'MirakurunRecordingTask: Mirakurun returned HTTP {response.status} for '
                     f'reservation_id={reservation_id} (url={stream_url}).'
                 )
+                # Mirakurun への接続に失敗したため、排他作成したファイルを閉じて削除する
+                output_file.close()
+                try:
+                    output_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
                 reservation.status = 'Failed'  # type: ignore[assignment]
                 await reservation.save()
                 return
@@ -276,8 +290,9 @@ class MirakurunRecordingTask:
 
             # ストリームをファイルへ書き込む
             # effective_end になったら asyncio.wait_for でタイムアウトさせる
+            # output_file は既に 'xb' モードで開いているため、ここでは再度 open() しない
             bytes_written = 0
-            with open(output_path, 'wb') as f:
+            with output_file:
                 while True:
                     # 残り録画時間を計算して次のチャンクの読み取りタイムアウトを設定
                     remaining = (effective_end - datetime.now(tz=JST)).total_seconds()
@@ -302,7 +317,7 @@ class MirakurunRecordingTask:
                             f'MirakurunRecordingTask: Stream ended for reservation_id={reservation_id}.'
                         )
                         break
-                    f.write(chunk)
+                    output_file.write(chunk)
                     bytes_written += len(chunk)
 
             logging.info(
@@ -362,6 +377,9 @@ class MirakurunRecordingTask:
             # aiohttp セッションを確実に閉じる
             if session is not None:
                 await session.close()
+            # 排他作成したファイルが例外などにより閉じられていない場合は、ここで必ず閉じる
+            if not output_file.closed:
+                output_file.close()
             # 録画タスク辞書から除去
             MirakurunRecordingTask._recording_tasks.pop(reservation_id, None)
 
@@ -480,6 +498,7 @@ class MirakurunRecordingTask:
                 file_hash = file_hash,
                 recorded_program_id = recorded_program_id,
                 base_url = cfg.telegram_base_url,
+                notification_template = cfg.telegram_notification_template,
             )
 
         except asyncio.CancelledError:

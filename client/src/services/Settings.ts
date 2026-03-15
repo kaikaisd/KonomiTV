@@ -135,6 +135,7 @@ export interface IServerSettings {
         telegram_bot_token: string;
         telegram_chat_id: string;
         telegram_base_url: string;
+        telegram_notification_template: string;
     };
 }
 
@@ -173,6 +174,7 @@ export const IServerSettingsDefault: IServerSettings = {
         telegram_bot_token: '',
         telegram_chat_id: '',
         telegram_base_url: '',
+        telegram_notification_template: '',
     },
 };
 

@@ -606,8 +606,12 @@ class MetadataAnalyzer:
 
             # 番組開始時刻 < 録画開始時刻 or 録画終了時刻 < 番組終了時刻 の場合、部分的に録画されていることを示すフラグを立てる
             ## 番組全編を録画するには、録画開始時刻が番組開始時刻よりも前で、録画終了時刻が番組終了時刻よりも後である必要がある
-            if (recorded_program.start_time < recorded_video.recording_start_time or
-                recorded_video.recording_end_time < recorded_program.end_time):
+            ## ただし、TOT から算出した録画開始時刻の精度誤差や、Mirakurun への接続確立に要する遅延 (数秒〜十数秒) を考慮して
+            ## 30 秒以内のズレは許容する。これにより、録画マージンが設定されていない KonomiTV 管理録画ファイルが
+            ## 常に「一部のみ録画」と誤判定されるのを防ぐ
+            PARTIAL_RECORDING_TOLERANCE = timedelta(seconds=30)
+            if (recorded_program.start_time + PARTIAL_RECORDING_TOLERANCE < recorded_video.recording_start_time or
+                recorded_video.recording_end_time + PARTIAL_RECORDING_TOLERANCE < recorded_program.end_time):
                 recorded_program.is_partially_recorded = True
             else:
                 recorded_program.is_partially_recorded = False

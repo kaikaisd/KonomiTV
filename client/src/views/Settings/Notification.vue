@@ -66,6 +66,27 @@
                         v-model="server_settings.notification.telegram_base_url"
                         @update:modelValue="onSettingChanged()" />
                 </div>
+                <div class="settings__item">
+                    <div class="settings__item-heading">通知メッセージのカスタムテンプレート (オプション)</div>
+                    <div class="settings__item-label">
+                        通知メッセージの本文をカスタマイズできます。空欄の場合はデフォルトの形式が使用されます。<br>
+                        テンプレートは Telegram の <strong>HTML モード</strong>で送信されます (<code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;a href="..."&gt;</code> などが使用可能)。<br>
+                        以下の変数が使用できます:<br>
+                        <code>{title}</code> 番組タイトル &nbsp;
+                        <code>{channel}</code> チャンネル名 &nbsp;
+                        <code>{start_time}</code> 放送開始時刻 &nbsp;
+                        <code>{end_time}</code> 放送終了時刻 &nbsp;
+                        <code>{duration}</code> 放送時間(分) &nbsp;
+                        <code>{description}</code> 番組概要 &nbsp;
+                        <code>{file_size}</code> 録画サイズ
+                    </div>
+                    <v-textarea class="settings__item-form" color="primary" variant="outlined" hide-details
+                        :density="is_form_dense ? 'compact' : 'default'"
+                        :rows="is_form_dense ? 5 : 7"
+                        :placeholder="default_template_placeholder"
+                        v-model="server_settings.notification.telegram_notification_template"
+                        @update:modelValue="onSettingChanged()" />
+                </div>
                 <v-divider class="mt-6" />
                 <div class="settings__item">
                     <div class="settings__item-heading">テスト通知を送信</div>
@@ -128,6 +149,14 @@ export default defineComponent({
 
             // 設定が変更されたかどうかのフラグ (未保存の変更があることを追跡する)
             is_dirty: false,
+
+            // カスタムテンプレートのプレースホルダー (デフォルト形式のサンプルを表示する)
+            default_template_placeholder: (
+                '📺 <b>{title}</b>\n' +
+                '📡 {channel}  |  🕐 {start_time}〜{end_time} ({duration}分)\n' +
+                '📝 {description}\n' +
+                '💾 録画サイズ: {file_size}'
+            ),
         };
     },
     async created() {

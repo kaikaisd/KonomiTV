@@ -794,6 +794,7 @@ class RecordedScanTask:
                     _notify_file_hash = recorded_program.recorded_video.file_hash
                     _notify_program_id = recorded_program.id
                     _notify_base_url = notification_cfg.telegram_base_url
+                    _notify_template = notification_cfg.telegram_notification_template
 
                     async def _notify_after_analysis() -> None:
                         # バックグラウンド解析完了後に通知を送信する
@@ -816,6 +817,7 @@ class RecordedScanTask:
                             file_hash = _notify_file_hash,
                             recorded_program_id = _notify_program_id,
                             base_url = _notify_base_url,
+                            notification_template = _notify_template,
                         )
 
                     notification_task = asyncio.create_task(_notify_after_analysis())

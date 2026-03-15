@@ -357,6 +357,9 @@ class _ServerSettingsNotification(BaseModel):
     telegram_chat_id: str = ''
     # KonomiTV の公開ベース URL (再生ボタンの URL 生成に使用。空文字列の場合はボタンを省略)
     telegram_base_url: str = ''
+    # カスタム通知テンプレート (空文字列の場合はデフォルトの MarkdownV2 形式を使用)
+    # 使用可能な変数: {title} {channel} {start_time} {end_time} {duration} {description} {file_size}
+    telegram_notification_template: str = ''
 
 class ServerSettings(BaseModel):
     general: _ServerSettingsGeneral = _ServerSettingsGeneral()

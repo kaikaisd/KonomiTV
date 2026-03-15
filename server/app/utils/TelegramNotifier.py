@@ -1,4 +1,5 @@
 
+import html
 import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -17,6 +18,15 @@ TELEGRAM_API_BASE = 'https://api.telegram.org'
 
 # 通知メッセージに含める番組概要の最大文字数 (これを超えたら末尾を「…」で切る)
 DESCRIPTION_MAX_LENGTH = 500
+
+# カスタムテンプレートのデフォルト値 (フロントエンドのプレースホルダーとして表示する)
+# {変数名} 形式のプレースホルダーを使用する。変数値は HTML エスケープされた上で HTML モードで送信される
+DEFAULT_NOTIFICATION_TEMPLATE = (
+    '📺 <b>{title}</b>\n'
+    '📡 {channel}  |  🕐 {start_time}〜{end_time} ({duration}分)\n'
+    '📝 {description}\n'
+    '💾 録画サイズ: {file_size}'
+)
 
 
 class TelegramNotifier:
@@ -110,6 +120,68 @@ class TelegramNotifier:
         return '\n'.join(lines)
 
     @staticmethod
+    def _buildCaptionFromTemplate(
+        template: str,
+        title: str,
+        channel_name: str | None,
+        start_time_str: str,
+        end_time_str: str,
+        duration_min: int,
+        description: str,
+        file_size: int,
+    ) -> tuple[str, str]:
+        """
+        カスタムテンプレートから通知本文 (HTML モード) を組み立てる。
+        各変数値は html.escape() で HTML エスケープされた上でテンプレートへ埋め込まれる。
+        テンプレートの静的部分には <b>, <i>, <a> などの HTML タグを使用できる。
+
+        使用可能な変数:
+            {title}       - 番組タイトル
+            {channel}     - チャンネル名
+            {start_time}  - 放送開始時刻 (HH:MM)
+            {end_time}    - 放送終了時刻 (HH:MM)
+            {duration}    - 放送時間 (分)
+            {description} - 番組概要
+            {file_size}   - 録画ファイルサイズ (例: "1.23 GB")
+
+        Args:
+            template (str): カスタムテンプレート文字列
+            title (str): 番組タイトル
+            channel_name (str | None): チャンネル名 (不明な場合は None)
+            start_time_str (str): 放送開始時刻の文字列
+            end_time_str (str): 放送終了時刻の文字列
+            duration_min (int): 放送時間 (分)
+            description (str): 番組概要
+            file_size (int): 録画ファイルサイズ (バイト)
+
+        Returns:
+            tuple[str, str]: (テキスト, parse_mode) のタプル。parse_mode は "HTML"
+        """
+
+        # 番組概要を最大文字数で切り詰める
+        if len(description) > DESCRIPTION_MAX_LENGTH:
+            description = description[:DESCRIPTION_MAX_LENGTH] + '…'
+
+        # 各変数値を HTML エスケープしてからテンプレートへ埋め込む
+        # これにより、タイトルや概要に含まれる <>&" などが Telegram HTML モードで誤解釈されるのを防ぐ
+        try:
+            text = template.format_map({
+                'title': html.escape(title),
+                'channel': html.escape(channel_name or '不明'),
+                'start_time': html.escape(start_time_str),
+                'end_time': html.escape(end_time_str),
+                'duration': duration_min,
+                'description': html.escape(description),
+                'file_size': html.escape(TelegramNotifier._formatFileSize(file_size)),
+            })
+        except (KeyError, ValueError) as ex:
+            # テンプレートの書式が不正な場合はそのまま送信してエラーを記録する
+            logging.warning(f'TelegramNotifier: Custom template format error: {ex}. Sending template as-is.')
+            text = template
+
+        return text, 'HTML'
+
+    @staticmethod
     async def sendRecordingNotification(
         bot_token: str,
         chat_id: str,
@@ -123,6 +195,7 @@ class TelegramNotifier:
         file_hash: str,
         recorded_program_id: int,
         base_url: str,
+        notification_template: str = '',
     ) -> bool:
         """
         録画完了通知を Telegram に送信する。
@@ -142,21 +215,36 @@ class TelegramNotifier:
             file_hash (str): 録画ファイルのハッシュ値 (サムネイルファイル名の特定に使用)
             recorded_program_id (int): 録画番組 ID (再生 URL の生成に使用)
             base_url (str): KonomiTV の公開ベース URL (空文字列の場合は再生ボタンを省略)
+            notification_template (str): カスタム通知テンプレート (空文字列の場合はデフォルトの MarkdownV2 形式を使用)
 
         Returns:
             bool: 送信に成功した場合は True、失敗した場合は False
         """
 
-        # 通知本文を組み立てる
-        caption = TelegramNotifier._buildCaption(
-            title = title,
-            channel_name = channel_name,
-            start_time_str = start_time_jst,
-            end_time_str = end_time_jst,
-            duration_min = duration_min,
-            description = description,
-            file_size = file_size,
-        )
+        # 通知本文と parse_mode を組み立てる
+        # カスタムテンプレートが設定されている場合は HTML モードで送信し、未設定の場合はデフォルトの MarkdownV2 形式を使用する
+        if notification_template:
+            caption, parse_mode = TelegramNotifier._buildCaptionFromTemplate(
+                template = notification_template,
+                title = title,
+                channel_name = channel_name,
+                start_time_str = start_time_jst,
+                end_time_str = end_time_jst,
+                duration_min = duration_min,
+                description = description,
+                file_size = file_size,
+            )
+        else:
+            caption = TelegramNotifier._buildCaption(
+                title = title,
+                channel_name = channel_name,
+                start_time_str = start_time_jst,
+                end_time_str = end_time_jst,
+                duration_min = duration_min,
+                description = description,
+                file_size = file_size,
+            )
+            parse_mode = 'MarkdownV2'
 
         # インラインキーボード (再生ボタン) を組み立てる
         # base_url が空文字列の場合はボタンを省略する
@@ -184,7 +272,7 @@ class TelegramNotifier:
                     data: dict[str, object] = {
                         'chat_id': chat_id,
                         'caption': caption,
-                        'parse_mode': 'MarkdownV2',
+                        'parse_mode': parse_mode,
                     }
                     if reply_markup is not None:
                         data['reply_markup'] = json.dumps(reply_markup)
@@ -199,7 +287,7 @@ class TelegramNotifier:
                     payload: dict[str, object] = {
                         'chat_id': chat_id,
                         'text': caption,
-                        'parse_mode': 'MarkdownV2',
+                        'parse_mode': parse_mode,
                     }
                     if reply_markup is not None:
                         payload['reply_markup'] = reply_markup
