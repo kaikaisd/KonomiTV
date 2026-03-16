@@ -74,6 +74,7 @@
                         以下の変数が使用できます:<br>
                         <code>{title}</code> 番組タイトル &nbsp;
                         <code>{channel}</code> チャンネル名 &nbsp;
+                        <code>{date}</code> 放送日付 &nbsp;
                         <code>{start_time}</code> 放送開始時刻 &nbsp;
                         <code>{end_time}</code> 放送終了時刻 &nbsp;
                         <code>{duration}</code> 放送時間(分) &nbsp;

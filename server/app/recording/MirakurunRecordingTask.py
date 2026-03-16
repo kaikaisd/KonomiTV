@@ -480,7 +480,9 @@ class MirakurunRecordingTask:
                 pass
 
             # 放送時間を HH:MM 形式でフォーマット
-            start_str = start_time.astimezone(JST).strftime('%H:%M')
+            start_jst = start_time.astimezone(JST)
+            start_str = start_jst.strftime('%H:%M')
+            date_str = start_jst.strftime('%Y/%m/%d')
             end_str = end_time.astimezone(JST).strftime('%H:%M')
             duration_min = max(1, int((end_time - start_time).total_seconds() / 60))
 
@@ -490,6 +492,7 @@ class MirakurunRecordingTask:
                 chat_id = cfg.telegram_chat_id,
                 title = title,
                 channel_name = channel_name,
+                date_jst = date_str,
                 start_time_jst = start_str,
                 end_time_jst = end_str,
                 duration_min = duration_min,

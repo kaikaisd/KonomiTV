@@ -124,6 +124,7 @@ class TelegramNotifier:
         template: str,
         title: str,
         channel_name: str | None,
+        date_str: str,
         start_time_str: str,
         end_time_str: str,
         duration_min: int,
@@ -138,6 +139,7 @@ class TelegramNotifier:
         使用可能な変数:
             {title}       - 番組タイトル
             {channel}     - チャンネル名
+            {date}        - 放送日付 (YYYY/MM/DD)
             {start_time}  - 放送開始時刻 (HH:MM)
             {end_time}    - 放送終了時刻 (HH:MM)
             {duration}    - 放送時間 (分)
@@ -148,6 +150,7 @@ class TelegramNotifier:
             template (str): カスタムテンプレート文字列
             title (str): 番組タイトル
             channel_name (str | None): チャンネル名 (不明な場合は None)
+            date_str (str): 放送日付の文字列 (例: "2025/03/17")
             start_time_str (str): 放送開始時刻の文字列
             end_time_str (str): 放送終了時刻の文字列
             duration_min (int): 放送時間 (分)
@@ -168,6 +171,7 @@ class TelegramNotifier:
             text = template.format_map({
                 'title': html.escape(title),
                 'channel': html.escape(channel_name or '不明'),
+                'date': html.escape(date_str),
                 'start_time': html.escape(start_time_str),
                 'end_time': html.escape(end_time_str),
                 'duration': duration_min,
@@ -187,6 +191,7 @@ class TelegramNotifier:
         chat_id: str,
         title: str,
         channel_name: str | None,
+        date_jst: str,
         start_time_jst: str,
         end_time_jst: str,
         duration_min: int,
@@ -207,6 +212,7 @@ class TelegramNotifier:
             chat_id (str): 送信先のチャット ID またはチャンネル名
             title (str): 番組タイトル
             channel_name (str | None): チャンネル名
+            date_jst (str): 放送日付 (YYYY/MM/DD 形式)
             start_time_jst (str): 放送開始時刻 (HH:MM 形式)
             end_time_jst (str): 放送終了時刻 (HH:MM 形式)
             duration_min (int): 放送時間 (分)
@@ -228,6 +234,7 @@ class TelegramNotifier:
                 template = notification_template,
                 title = title,
                 channel_name = channel_name,
+                date_str = date_jst,
                 start_time_str = start_time_jst,
                 end_time_str = end_time_jst,
                 duration_min = duration_min,

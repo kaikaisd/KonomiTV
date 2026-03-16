@@ -203,6 +203,7 @@ async def ValidateTelegramTemplateAPI(
         preview = template.format_map({
             'title': html_module.escape('サンプル番組タイトル'),
             'channel': html_module.escape('NHK総合'),
+            'date': html_module.escape('2025/03/17'),
             'start_time': html_module.escape('21:00'),
             'end_time': html_module.escape('22:00'),
             'duration': 60,

@@ -774,6 +774,7 @@ class RecordedScanTask:
                     start_jst = recorded_program.start_time.astimezone(JST)
                     end_jst = recorded_program.end_time.astimezone(JST)
                     start_str = start_jst.strftime('%H:%M')
+                    date_str = start_jst.strftime('%Y/%m/%d')
                     end_str = end_jst.strftime('%H:%M')
                     duration_min = max(1, round(recorded_program.duration / 60))
 
@@ -786,6 +787,7 @@ class RecordedScanTask:
                     _notify_chat_id = notification_cfg.telegram_chat_id
                     _notify_title = recorded_program.title
                     _notify_channel_name = channel_name
+                    _notify_date_str = date_str
                     _notify_start_str = start_str
                     _notify_end_str = end_str
                     _notify_duration_min = duration_min
@@ -809,6 +811,7 @@ class RecordedScanTask:
                             chat_id = _notify_chat_id,
                             title = _notify_title,
                             channel_name = _notify_channel_name,
+                            date_jst = _notify_date_str,
                             start_time_jst = _notify_start_str,
                             end_time_jst = _notify_end_str,
                             duration_min = _notify_duration_min,
