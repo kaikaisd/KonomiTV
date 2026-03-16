@@ -191,3 +191,33 @@ jobs:
         with:
           name: KonomiTV-Installer${{ matrix.artifact_suffix }}.elf
           path: installer/dist/KonomiTV-Installer${{ matrix.artifact_suffix }}.elf
+
+  # ビルド成功後に GitHub Actions キャッシュを全削除する
+  ## build-windows と build-linux (全 matrix) の両方が成功した場合のみ実行される
+  ## Docker レイヤーキャッシュ (type=gha) と Poetry キャッシュをクリアし、
+  ## 次回ビルドが古いキャッシュに依存しないようにする
+  clear-cache:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: write
+    steps:
+
+      # リポジトリに存在する全 Actions キャッシュを一括削除する
+      # GitHub REST API の actions/caches エンドポイントでキャッシュ ID 一覧を取得し、
+      # 各 ID に対して DELETE リクエストを送信する
+      - name: Clear All GitHub Actions Caches
+        run: |
+          cache_ids=$(gh api "repos/${{ github.repository }}/actions/caches" \
+            --jq '.actions_caches[].id')
+          if [ -z "$cache_ids" ]; then
+            echo "No caches found, nothing to delete."
+            exit 0
+          fi
+          echo "$cache_ids" | while read -r cache_id; do
+            echo "Deleting cache id=${cache_id}..."
+            gh api --method DELETE "repos/${{ github.repository }}/actions/caches/${cache_id}"
+          done
+          echo "All caches deleted."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
