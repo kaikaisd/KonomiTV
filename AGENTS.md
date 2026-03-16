@@ -42,8 +42,9 @@ Windows では Windows サービス、Linux では pm2 サービスとして動�
   - `views/`: Vue ルートコンポーネント/ページ
     - `TV/`: テレビ視聴関連ページ
     - `Videos/`: 動画関連ページ
-    - `Reservations/`: 予約関連ページ
+    - `Reservations/`: 予約関連ページ（録画予約一覧・予約追加/編集ダイアログ・自動予約ルール管理）
     - `Settings/`: アプリケーション設定ページ
+      - `Notification.vue`: Telegram 通知設定ページ（Bot トークン・チャット ID・テンプレート・プレビュー UI）
     - `Login.vue`: ログインページ
     - `Register.vue`: アカウント登録ページ
     - `MyList.vue`: マイリストページ
@@ -63,6 +64,8 @@ Windows では Windows サービス、Linux では pm2 サービスとして動�
     - `Breadcrumbs.vue`: パンくずリスト表示コンポーネント
   - `stores/`: 状態管理 (Pinia ストア)
   - `services/`: サーバー API へのサービスクライアント
+    - `Reservations.ts`: 録画予約 CRUD API クライアント（Mirakurun バックエンド向け）
+    - `ReservationConditions.ts`: キーワード自動予約ルール CRUD API クライアント
     - `player/`: KonomiTV の視聴画面で用いられるライブ/ビデオプレイヤーのロジック (重要)
       - `managers/`: PlayerController に紐づく様々な機能のロジックを提供し、各機能に責任を持つ PlayerManager 群
       - `PlayerController.ts`: 動画プレイヤーである DPlayer に関連するロジックを丸ごとラップするクラスで、KonomiTV の再生系ロジックの中核を担う
@@ -84,21 +87,23 @@ Windows では Windows サービス、Linux では pm2 サービスとして動�
   - `routers/`: API ルートハンドラー
     - `ChannelsRouter.py`: チャンネル関連メタデータ取得 API
     - `ProgramsRouter.py`: 番組関連メタデータ取得 API
-    - `VideosRouter.py`: 録画番組メタデータ取得 API
+    - `VideosRouter.py`: 録画番組メタデータ取得 API（`GET /videos/storage` によるディスク使用量集計を含む）
     - `SeriesRouter.py`: 番組シリーズ関連 API
     - `LiveStreamsRouter.py`: 放送中テレビ放送のライブストリーミング配信関連 API
     - `VideoStreamsRouter.py`: 録画番組のストリーミング配信関連 API
-    - `ReservationsRouter.py`: EDCB と連携したテレビ番組の録画予約関連 API
-    - `ReservationConditionsRouter.py`: EDCB と連携したテレビ番組の自動録画予約条件 (EPG 自動予約) 関連 API
+    - `ReservationsRouter.py`: 録画予約関連 API（EDCB 連携 + Mirakurun バックエンド向け CRUD）
+    - `ReservationConditionsRouter.py`: キーワード自動予約ルール CRUD API（Mirakurun バックエンド専用）
     - `DataBroadcastingRouter.py`: データ放送のインターネット接続機能向け API
     - `CapturesRouter.py`: キャプチャ画像管理 API
     - `TwitterRouter.py`: Twitter 連携 API
     - `NiconicoRouter.py`: ニコニコ実況連携 API
     - `UsersRouter.py`: ユーザーアカウント管理 API
-    - `SettingsRouter.py`: クライアント・サーバー設定管理 API
+    - `SettingsRouter.py`: クライアント・サーバー設定管理 API（Telegram テスト通知 `POST /notification/test`・テンプレート検証 `POST /notification/validate-template` を含む）
     - `MaintenanceRouter.py`: サーバーメンテナンス用 API
     - `VersionRouter.py`: バージョン情報 API
   - `models/`: データベースモデルとスキーマ
+    - `MirakurunReservation.py`: Mirakurun バックエンドの録画予約を管理するモデル（チャンネル FK・番組情報・録画設定・ステータス管理）
+    - `MirakurunRecordingRule.py`: キーワード自動予約ルールを管理するモデル（`ProgramSearchCondition` + `RecordSettings` を JSON で保存）
     - `Channel.py`: チャンネル情報を管理するモデル（放送局情報、チャンネル番号、ロゴ、ストリーム設定など）
     - `Program.py`: 放送番組情報を管理するモデル（番組メタデータ、EPG 番組情報、タイトル、番組詳細、ジャンルなど）
     - `RecordedProgram.py`: 録画済み番組のメタデータを管理するモデル（EPG 録画番組情報、録画開始/終了時刻など）
@@ -114,6 +119,9 @@ Windows では Windows サービス、Linux では pm2 サービスとして動�
     - `LiveStream.py`: 放送波のライブストリーミングの状態管理
     - `VideoStream.py`: 録画番組のオンデマンドストリーミングの状態管理
     - `LivePSIDataArchiver.py`: 放送波から PSI/SI データを抽出・アーカイブする機能の実装
+  - `recording/`: Mirakurun バックエンド専用の録画エンジン実装
+    - `MirakurunRecordingTask.py`: 録画予約スケジューラー・Mirakurun ストリーム受信・TS ファイル書き込み・Telegram 通知送信を管理するバックグラウンドタスク
+    - `MirakurunRuleMatchTask.py`: キーワード自動予約ルールに基づき番組 DB を定期スキャンし、マッチした番組の `MirakurunReservation` を自動生成するバックグラウンドタスク（5分ごと、14日先読み）
   - `metadata/`: 録画番組データから番組情報などのメタデータを抽出・保存するための実装
     - `RecordedScanTask.py`: 録画フォルダの監視とメタデータの DB への同期を行うタスク
     - `MetadataAnalyzer.py`: 録画ファイルのメタデータを解析するクラス
@@ -129,8 +137,9 @@ Windows では Windows サービス、Linux では pm2 サービスとして動�
     - `OAuthCallbackResponse.py`: OAuth 認証のコールバック時にブラウザに情報を渡すために返す特殊なレスポンス
     - `DriveIOLimiter.py`: ドライブごとの同時実行数を制限するためのユーティリティクラス
     - `ProcessLimiter.py`: プロセスごとの同時実行数を制限するためのユーティリティクラス
+    - `TelegramNotifier.py`: Telegram Bot 経由の録画完了通知送信クラス（サムネイル添付・HTML テンプレート展開・テスト通知対応）
   - `app.py`: FastAPI アプリケーションやルーターの初期化・バックグラウンドタスクの定義
-  - `config.py`: サーバー設定 (`config.yaml`) のロードとバリデーション
+  - `config.py`: サーバー設定 (`config.yaml`) のロードとバリデーション・`ConfigFileWatcher` による config.yaml ホットリロード
   - `constants.py`: サーバー全体で用いられるグローバル定数
   - `logging.py`: ロギング設定
   - `schemas.py`: API リクエスト/レスポンス型に用いる Pydantic スキーマ

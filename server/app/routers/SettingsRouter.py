@@ -1,8 +1,9 @@
 
+import html as html_module
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from app import logging
 from app.config import (
@@ -168,3 +169,55 @@ async def TestTelegramNotificationAPI(
         )
 
     return {'detail': 'Test notification sent successfully.'}
+
+
+class _TemplateValidationRequest(BaseModel):
+    template: str
+
+
+@router.post(
+    '/notification/validate-template',
+    summary = 'Telegram 通知テンプレート検証 API',
+    response_description = 'テンプレートの検証結果とプレビューテキスト。',
+)
+async def ValidateTelegramTemplateAPI(
+    request: _TemplateValidationRequest,
+    current_user: Annotated[User, Depends(GetCurrentUser)],
+) -> dict[str, str]:
+    """
+    Telegram 通知テンプレートの書式を検証し、サンプルデータでレンダリングしたプレビューテキストを返す。<br>
+    テンプレートに未知の変数名や書式エラーが含まれる場合は 422 エラーを返す。<br>
+    JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されていないとアクセスできない。
+    """
+
+    template = request.template.strip()
+    if not template:
+        raise HTTPException(
+            status_code = status.HTTP_400_BAD_REQUEST,
+            detail = 'Template is empty.',
+        )
+
+    # サンプルデータで {変数名} プレースホルダーを展開し、書式エラーを検出する
+    # HTML エスケープは実際の通知送信と同じように適用する
+    try:
+        preview = template.format_map({
+            'title': html_module.escape('サンプル番組タイトル'),
+            'channel': html_module.escape('NHK総合'),
+            'start_time': html_module.escape('21:00'),
+            'end_time': html_module.escape('22:00'),
+            'duration': 60,
+            'description': html_module.escape('これはサンプルの番組概要です。テンプレートが正しく機能しているか確認できます。'),
+            'file_size': html_module.escape('2.34 GB'),
+        })
+    except KeyError as ex:
+        raise HTTPException(
+            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail = f'Unknown variable in template: {ex}. Available variables: {{title}}, {{channel}}, {{start_time}}, {{end_time}}, {{duration}}, {{description}}, {{file_size}}',
+        )
+    except ValueError as ex:
+        raise HTTPException(
+            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail = f'Template format error: {ex}. Check for unmatched {{ or }} characters.',
+        )
+
+    return {'preview': preview}

@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import logging
-from app.config import Config, LoadConfig
+from app.config import Config, ConfigFileWatcher, LoadConfig
 from app.constants import (
     CLIENT_DIR,
     DATABASE_CONFIG,
@@ -218,12 +218,17 @@ tortoise.contrib.fastapi.register_tortoise(
 )
 
 # サーバーの起動時に実行する
+config_file_watcher: ConfigFileWatcher | None = None
 recorded_scan_task: RecordedScanTask | None = None
 mirakurun_recording_task: MirakurunRecordingTask | None = None
 mirakurun_rule_match_task: MirakurunRuleMatchTask | None = None
 @app.on_event('startup')
 async def Startup():
-    global recorded_scan_task, mirakurun_recording_task, mirakurun_rule_match_task
+    global config_file_watcher, recorded_scan_task, mirakurun_recording_task, mirakurun_rule_match_task
+
+    # config.yaml のホットリロード監視タスクを開始
+    config_file_watcher = ConfigFileWatcher()
+    await config_file_watcher.start()
 
     # チャンネル情報を更新
     await Channel.update()
@@ -282,6 +287,12 @@ async def Shutdown():
     if cleanup is True:
         return
     cleanup = True
+
+    # config.yaml のホットリロード監視タスクを停止
+    global config_file_watcher
+    if config_file_watcher is not None:
+        await config_file_watcher.stop()
+        config_file_watcher = None
 
     # 全てのライブストリームを終了する
     for live_stream in LiveStream.getAllLiveStreams():

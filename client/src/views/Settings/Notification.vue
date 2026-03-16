@@ -85,7 +85,21 @@
                         :rows="is_form_dense ? 5 : 7"
                         :placeholder="default_template_placeholder"
                         v-model="server_settings.notification.telegram_notification_template"
-                        @update:modelValue="onSettingChanged()" />
+                        @update:modelValue="onTemplateChanged()" />
+                    <!-- テンプレートプレビュー表示エリア -->
+                    <div v-if="template_preview !== null" class="template-preview mt-3">
+                        <div class="template-preview__heading">
+                            <Icon icon="mdi:eye" width="16px" class="mr-1" />プレビュー (サンプルデータで展開)
+                        </div>
+                        <pre class="template-preview__body">{{ template_preview }}</pre>
+                    </div>
+                    <!-- テンプレートプレビューボタン -->
+                    <v-btn class="settings__save-button mt-3" variant="outlined"
+                        :loading="is_validating_template"
+                        :disabled="!server_settings.notification.telegram_notification_template"
+                        @click="previewTemplate()">
+                        <Icon icon="mdi:eye" class="mr-2" height="19px" />テンプレートをプレビュー
+                    </v-btn>
                 </div>
                 <v-divider class="mt-6" />
                 <div class="settings__item">
@@ -147,6 +161,12 @@ export default defineComponent({
             // テスト通知送信中フラグ
             is_sending_test: false,
 
+            // テンプレート検証中フラグ
+            is_validating_template: false,
+
+            // テンプレートプレビューテキスト (null = 未取得 or テンプレート変更後リセット)
+            template_preview: null as string | null,
+
             // 設定が変更されたかどうかのフラグ (未保存の変更があることを追跡する)
             is_dirty: false,
 
@@ -170,6 +190,13 @@ export default defineComponent({
         /** 設定フィールドが変更されたときに呼ばれる (未保存フラグを立てる) */
         onSettingChanged() {
             this.is_dirty = true;
+        },
+
+        /** テンプレートフィールドが変更されたときに呼ばれる (プレビューをリセットして未保存フラグを立てる) */
+        onTemplateChanged() {
+            this.is_dirty = true;
+            // テンプレート内容が変わったらプレビューをリセットして再取得を促す
+            this.template_preview = null;
         },
 
         /** 設定を保存する */
@@ -202,7 +229,50 @@ export default defineComponent({
                 this.is_sending_test = false;
             }
         },
+
+        /** テンプレートをサンプルデータでプレビューする */
+        async previewTemplate() {
+            const template = this.server_settings.notification.telegram_notification_template;
+            if (!template) return;
+            this.is_validating_template = true;
+            try {
+                const preview = await Settings.validateTelegramTemplate(template);
+                if (preview !== null) {
+                    this.template_preview = preview;
+                    Message.success('テンプレートの書式は正しいです。');
+                }
+            } finally {
+                this.is_validating_template = false;
+            }
+        },
     },
 });
 
 </script>
+<style lang="scss" scoped>
+
+.template-preview {
+    border: 1px solid rgb(var(--v-theme-on-surface), 0.2);
+    border-radius: 4px;
+    padding: 12px 14px;
+    background: rgb(var(--v-theme-surface-variant), 0.4);
+
+    &__heading {
+        display: flex;
+        align-items: center;
+        font-size: 12px;
+        color: rgb(var(--v-theme-on-surface), 0.6);
+        margin-bottom: 8px;
+    }
+
+    &__body {
+        font-size: 13px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: inherit;
+        margin: 0;
+    }
+}
+
+</style>

@@ -2,7 +2,7 @@
 
 このフォクは [本家 KonomiTV](https://github.com/tsukumijima/KonomiTV)と[ichigomoti](https://github.com/ichigomoti)をベースに、l3tnun様の[EPGStation](https://github.com/l3tnun/EPGStation)使用したのMirakurun録画ロジックをKononiTVに追加しました。
 
-あと、Telegarm録画完了メッセージ機能か実装されました、Telegram　Botを利用し、録画完了のどき通じております。
+Telegram Bot を利用した録画完了通知機能を実装しました。録画完了時にサムネイル・番組情報・再生リンクを通知し、HTML テンプレートによるカスタマイズや設定のホットリロードにも対応しています。
 
 ほとんどClaude Codeに作らせています(このREADME.mdも)、そのためバグも多くあります。インストールされる際はバックアップを取ることを強く推奨します。
 
@@ -40,7 +40,16 @@ EDCB を使わず、Mirakurun バックエンドのみで録画予約が行え�
 | **重複タイトルチェック** | 同タイトルを再録画しないよう、チャンネル単位またはすべてのチャンネルで重複チェック |
 | **プレビュー検索** | 保存前に条件に一致する番組を検索して件数・タイトルを確認 |
 
-### 3. Cloudflare Access ログアウト
+### 3. ストレージ使用量バー
+
+ビデオページのホーム画面（録画番組一覧の上部）に、録画フォルダのディスク使用量をリアルタイムで表示するバーを追加しました。
+
+- 録画フォルダをディスク単位にまとめて表示（同一ディスク上の複数フォルダは1エントリに集約）
+- 使用量・合計容量・空き容量を人間が読みやすいサイズ形式（GB/TB）で表示
+- 使用率に応じて色が変化: 通常（プライマリ）→ 75% 以上（警告黄）→ 90% 以上（エラー赤）
+- `GET /api/videos/storage` エンドポイントから取得し、ページロード時に並行実行で取得
+
+### 4. Cloudflare Access ログアウト
 
 ボタンをクリックして、`/cdn-cgi/access/logout` をリクエストする。
 
@@ -61,6 +70,45 @@ docker compose -f docker-compose.check.yaml run --rm check
 - どちらかが失敗した場合は非ゼロの終了コードで終了し、CI 等でも利用可能
 - ソースコードはホストからマウントされるため、変更後に毎回リビルドする必要はない
 
+### 5. Telegram 録画完了通知
+
+録画が完了したときに Telegram Bot 経由でサムネイル・番組情報・再生リンクを通知する機能を追加しました。
+
+#### 基本機能
+
+- 録画完了時にサムネイル画像（録画ファイルから自動生成）を添付して Telegram に通知
+- 番組タイトル・チャンネル名・放送時刻・番組概要・録画サイズを通知メッセージに含める
+- `telegram_base_url` を設定することで、通知に「再生」ボタン（インラインキーボード）を付与可能
+- Mirakurun 録画・非 Mirakurun 録画（既存録画ファイルのメタデータ解析後）の両方に対応
+
+#### カスタムテンプレート
+
+Telegram の **HTML モード**で送信されるメッセージ本文を自由にカスタマイズできます。
+
+| 変数 | 内容 |
+|------|------|
+| `{title}` | 番組タイトル |
+| `{channel}` | チャンネル名 |
+| `{start_time}` | 放送開始時刻 |
+| `{end_time}` | 放送終了時刻 |
+| `{duration}` | 放送時間（分） |
+| `{description}` | 番組概要 |
+| `{file_size}` | 録画ファイルサイズ |
+
+テンプレートは `<b>`, `<i>`, `<a href="...">` などの Telegram HTML タグを使用可能です。空欄の場合はデフォルト形式が使用されます。
+
+#### テンプレートプレビュー
+
+設定画面（設定 → 通知）の「テンプレートをプレビュー」ボタンから、保存前にサンプルデータで展開結果を確認できます。未知の変数名や括弧の不一致も事前に検出します。
+
+#### config.yaml のホットリロード
+
+`config.yaml` をエディタで直接編集した場合も、サーバーを再起動せずに設定が自動反映されます。
+
+- `watchfiles` ライブラリによる非同期ファイル監視（`ConfigFileWatcher` クラス）
+- ファイル変更検出後、約 1 秒以内にインメモリ設定が更新される
+- UI 保存・手動編集の両方でホットリロードが機能する
+
 ## 追加・拡張した API
 
 ### 録画予約関連（Mirakurun バックエンド）
@@ -77,6 +125,19 @@ docker compose -f docker-compose.check.yaml run --rm check
 | DELETE | `/api/reservation-conditions/{condition_id}` | 自動予約ルール削除 |
 | POST | `/api/programs/search` | 番組検索（自動予約プレビュー・EDCB/Mirakurun 共通） |
 
+### ストレージ関連
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/api/videos/storage` | 録画フォルダのディスク使用量取得（ディスク単位で重複排除） |
+
+### Telegram 通知関連
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| POST | `/api/settings/notification/test` | テスト通知送信（Bot トークン・チャット ID の動作確認） |
+| POST | `/api/settings/notification/validate-template` | 通知テンプレート検証・サンプルデータでのプレビュー生成 |
+
 
 ## 変更ファイル一覧
 
@@ -87,6 +148,11 @@ docker compose -f docker-compose.check.yaml run --rm check
 
 | ファイル | 変更内容 |
 |---------|---------|
+| `server/app/config.py` | `ConfigFileWatcher` クラス追加・`ReadCurrentConfig()` バグ修正・`SaveConfig()` のインメモリ即時反映 |
+| `server/app/app.py` | `ConfigFileWatcher` の起動・停止をサーバーライフサイクルに登録 |
+| `server/app/utils/TelegramNotifier.py` | **[新規]** Telegram 通知送信クラス（サムネイル添付・HTML テンプレート対応） |
+| `server/app/routers/SettingsRouter.py` | Telegram テスト通知 API・テンプレート検証 API の追加 |
+| `config.example.yaml` | `telegram_notification_template` フィールドの追加とコメント整備 |
 | `server/app/migrations/models/10_*.py` | **[新規]** Mirakurun 録画予約 DB マイグレーション |
 | `server/app/models/MirakurunReservation.py` | **[新規]** Mirakurun 録画予約モデル |
 | `server/app/models/MirakurunRecordingRule.py` | **[新規]** キーワード自動予約ルールモデル |
@@ -94,6 +160,8 @@ docker compose -f docker-compose.check.yaml run --rm check
 | `server/app/routers/ReservationsRouter.py` | Mirakurun 録画予約 CRUD API の追加 |
 | `server/app/routers/ReservationConditionsRouter.py` | **[新規]** 自動予約ルール CRUD API |
 | `server/app/routers/ProgramsRouter.py` | 番組検索 API に Mirakurun バックエンド対応を追加 |
+| `server/app/routers/VideosRouter.py` | `GET /api/videos/storage` エンドポイントを追加（ディスク単位重複排除・使用量集計）|
+| `server/app/schemas.py` | `FolderStorageInfo`・`StorageInfo` モデルを追加 |
 
 ### クライアント側 (TypeScript / Vue)
 
@@ -101,6 +169,10 @@ docker compose -f docker-compose.check.yaml run --rm check
 |---------|---------|
 | `client/src/components/Reservations/ReservationConditionEditDialog.vue` | **[新規]** キーワード自動予約ルール編集ダイアログ（チャンネル・ジャンル・曜日・プレビュー対応） |
 | `client/src/components/Reservations/ReservationRecordingSettings.vue` | 録画設定コンポーネントの拡張 |
+| `client/src/views/Videos/Home.vue` | ストレージ使用量バーを追加（使用率に応じた警告色変化） |
+| `client/src/services/Videos.ts` | `IFolderStorageInfo`・`IStorageInfo` インターフェースと `fetchStorageInfo()` を追加 |
+| `client/src/views/Settings/Notification.vue` | **[新規]** Telegram 通知設定ページ（テンプレートプレビュー UI 含む） |
+| `client/src/services/Settings.ts` | `validateTelegramTemplate()` メソッド追加・通知設定フィールドの追加 |
 | `client/src/services/Reservations.ts` | 録画予約 API クライアント |
 | `client/src/services/ReservationConditions.ts` | 自動予約ルール API クライアント |
 | `client/src/components/Navigation.vue` | 予約メニュー項目の追加 |

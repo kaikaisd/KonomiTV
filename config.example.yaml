@@ -130,3 +130,8 @@ notification:
 
     # KonomiTV の公開ベース URL (再生ボタンの URL 生成に使用。空文字列の場合はボタンを省略)
     telegram_base_url: ''
+
+    # 通知メッセージのカスタムテンプレート (空文字列の場合はデフォルトの形式が使用されます)
+    # テンプレートは Telegram の HTML モードで送信されます (<b>, <i>, <a href="..."> などが使用可能)
+    # 使用可能な変数: {title} {channel} {start_time} {end_time} {duration} {description} {file_size}
+    telegram_notification_template: ''

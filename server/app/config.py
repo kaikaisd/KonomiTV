@@ -583,6 +583,13 @@ def SaveConfig(config: ServerSettings) -> None:
     with open(_CONFIG_YAML_PATH, mode='w', encoding='utf-8') as file:
         yaml.dump(config_raw, file, transform=transform)
 
+    # ディスク保存が完了した後、インメモリの _CONFIG を更新する
+    # これにより、通知テンプレートなどの設定がサーバー再起動なしに Config() 経由で即時反映される
+    # (仮に _CONFIG を更新しても、すでに Config() から取得した値を使って実行されている処理は更新できないが、
+    #  録画完了通知のように動的に Config() を参照する処理には有効)
+    global _CONFIG
+    _CONFIG = config
+
 
 def Config() -> ServerSettings:
     """
@@ -611,31 +618,84 @@ def ReadCurrentConfig() -> ServerSettings:
 
     global _CONFIG_YAML_PATH
 
-    def _merge_dicts(base_dict: dict[str, Any], override_dict: dict[str, Any]) -> dict[str, Any]:
-        """デフォルト設定と読み込み設定をディープマージする"""
-        merged_dict = dict(base_dict)
-        for key, value in override_dict.items():
-            if (
-                key in merged_dict
-                and isinstance(merged_dict[key], dict)
-                and isinstance(value, dict)
-            ):
-                merged_dict[key] = _merge_dicts(merged_dict[key], value)
-            else:
-                merged_dict[key] = value
-        return merged_dict
-
     try:
         with open(_CONFIG_YAML_PATH, encoding='utf-8') as file:
             config_raw = ruamel.yaml.YAML().load(file) or {}
         config_dict: dict[str, Any] = dict(config_raw)
-        # config.yaml に存在しない設定値はデフォルト値で補完する
-        default_config_dict = ServerSettings().model_dump(mode='json')
-        config_dict = _merge_dicts(default_config_dict, config_dict)
+        # bypass_validation=True を渡すことで EDCB/Mirakurun 接続確認などの重いバリデーションをスキップする
+        # ServerSettings() を直接呼ぶと bypass_validation コンテキストなしでバリデーターが実行され、
+        # EDCB が起動していない環境などで ValidationError が発生して Config() フォールバックに陥るため、
+        # model_validate に context を渡す形式を使う
+        # Pydantic は config_dict にないフィールドを自動的にモデルのデフォルト値で補完する
         return ServerSettings.model_validate(config_dict, context={'bypass_validation': True})
     except Exception:
         # ファイル読み込み失敗時はインメモリの設定にフォールバック
         return Config()
+
+
+class ConfigFileWatcher:
+    """
+    config.yaml の変更を watchfiles で監視し、変更を検出したら _CONFIG をホットリロードするバックグラウンドタスク。
+    SaveConfig() による UI 経由の保存だけでなく、手動での config.yaml 直接編集にも対応する。
+    RecordedScanTask と同じ start()/stop()/run() パターンで実装されており、app.py の startup/shutdown ハンドラに登録する。
+    """
+
+    def __init__(self) -> None:
+        # タスクが実行中かどうかのフラグ
+        self._is_running: bool = False
+        # asyncio タスクの参照 (GC されないよう保持する)
+        self._task: asyncio.Task[None] | None = None
+
+    async def start(self) -> None:
+        """
+        バックグラウンドでファイル監視タスクを起動する。
+        すでに起動中の場合は何もしない。
+        """
+        if self._is_running:
+            return
+        self._is_running = True
+        # fire-and-forget でバックグラウンド実行する
+        self._task = asyncio.create_task(self.run())
+
+    async def stop(self) -> None:
+        """
+        ファイル監視タスクをキャンセルして終了を待つ。
+        """
+        self._is_running = False
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+    async def run(self) -> None:
+        """
+        config.yaml を watchfiles で監視し、変更があれば _CONFIG を再読み込みする。
+        SaveConfig() がディスクへ書き込んだときもこのウォッチャーが発火するが、
+        その場合も ReadCurrentConfig() の結果は SaveConfig() が設定した値と同じになるため無害。
+        """
+
+        # 循環参照を避けるために遅延インポート
+        from watchfiles import Change, awatch
+
+        from app import logging
+
+        try:
+            async for changes in awatch(str(_CONFIG_YAML_PATH)):
+                if not self._is_running:
+                    break
+                # modified または added の場合だけリロードする (deleted は無視)
+                if any(ct in (Change.modified, Change.added) for ct, _ in changes):
+                    new_config = ReadCurrentConfig()
+                    global _CONFIG
+                    _CONFIG = new_config
+                    logging.info('Config hot-reloaded from config.yaml.')
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logging.error('ConfigFileWatcher stopped unexpectedly.', exc_info=True)
 
 
 def GetServerPort() -> int:

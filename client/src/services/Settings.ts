@@ -248,6 +248,29 @@ class Settings {
     }
 
     /**
+     * Telegram 通知テンプレートを検証し、サンプルデータでのプレビューテキストを返す
+     * @param template 検証するテンプレート文字列
+     * @return プレビューテキスト (検証に失敗した場合は null)
+     */
+    static async validateTelegramTemplate(template: string): Promise<string | null> {
+
+        // API リクエストを実行
+        const response = await APIClient.post<{preview: string}>('/settings/notification/validate-template', {template});
+
+        // エラー処理
+        if (response.type === 'error') {
+            switch (response.data.detail) {
+                default:
+                    APIClient.showGenericError(response, 'テンプレートの検証に失敗しました。変数名や書式を確認してください。');
+                    break;
+            }
+            return null;
+        }
+
+        return response.data.preview;
+    }
+
+    /**
      * Telegram テスト通知を送信する
      * @return 成功した場合は true
      */
