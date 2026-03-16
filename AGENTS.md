@@ -3,6 +3,15 @@
 ## プロジェクト固有の注意事項
 
 - yarn や poetry はそれぞれ `client/` と `server/` のディレクトリに移動した状態で実行してください。ルートディレクトリにはパッケージ管理系のファイルは一切配置していません。
+- バージョンを上げる際は、ユーザーの確認を得た後、以下の3ファイルのバージョンを揃えて更新する:
+  - `server/app/constants.py` の `VERSION` (例: `'0.13.7.mirakurun'`)
+  - `client/package.json` の `"version"` (例: `"0.13.7.mirakurun"`)
+  - `server/pyproject.toml` の `version` (例: `"0.13.7+mirakurun"`)
+  - バージョンアップのコミット後、必ず同じバージョン番号で git tag を打ち、タグも push する:
+    ```
+    git tag v0.13.7.mirakurun
+    git push origin v0.13.7.mirakurun
+    ```
 - サーバー側では poetry を使っているので、python コマンドは必ず全て poetry run 経由で実行します。python を直接実行すると .venv/ 以下のライブラリがインストールされていないために失敗します。
 - 開発サーバーは `yarn dev` で起動します。
 - クライアントの開発サーバーは `https://my.local.konomi.tv:7001` でリッスンされるので (Akebi HTTPS Server による HTTPS リバースプロキシが同時に起動されるため) 、Chrome DevTools MCP では `https://my.local.konomi.tv:7001` を使ってアクセスしてください。
