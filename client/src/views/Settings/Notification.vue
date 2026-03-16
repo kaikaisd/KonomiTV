@@ -77,7 +77,7 @@
                         <code>{date}</code> 放送日付 &nbsp;
                         <code>{start_time}</code> 放送開始時刻 &nbsp;
                         <code>{end_time}</code> 放送終了時刻 &nbsp;
-                        <code>{duration}</code> 放送時間(分) &nbsp;
+                        <code>{duration}</code> 放送時間 (例: 60分) &nbsp;
                         <code>{description}</code> 番組概要 &nbsp;
                         <code>{file_size}</code> 録画サイズ
                     </div>

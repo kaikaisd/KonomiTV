@@ -206,7 +206,7 @@ async def ValidateTelegramTemplateAPI(
             'date': html_module.escape('2025/03/17'),
             'start_time': html_module.escape('21:00'),
             'end_time': html_module.escape('22:00'),
-            'duration': 60,
+            'duration': '60分',
             'description': html_module.escape('これはサンプルの番組概要です。テンプレートが正しく機能しているか確認できます。'),
             'file_size': html_module.escape('2.34 GB'),
         })

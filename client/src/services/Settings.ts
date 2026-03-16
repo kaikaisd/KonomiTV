@@ -137,6 +137,10 @@ export interface IServerSettings {
         telegram_base_url: string;
         telegram_notification_template: string;
     };
+    recording: {
+        end_margin_seconds: number;
+        filename_format: string;
+    };
 }
 
 /* サーバー設定を表すインターフェースのデフォルト値 */
@@ -175,6 +179,10 @@ export const IServerSettingsDefault: IServerSettings = {
         telegram_chat_id: '',
         telegram_base_url: '',
         telegram_notification_template: '',
+    },
+    recording: {
+        end_margin_seconds: 5,
+        filename_format: '',
     },
 };
 

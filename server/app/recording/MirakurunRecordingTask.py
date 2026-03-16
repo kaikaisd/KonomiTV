@@ -214,20 +214,49 @@ class MirakurunRecordingTask:
             await reservation.save()
             return
 
-        # ファイル名を構築: {title}_{YYYYMMDD_HHMMSS}_{channel_name}.m2ts
+        # ファイル名のベース部分を構築する
+        # recording.filename_format が設定されている場合はテンプレートを展開し、
+        # 未設定の場合は {title}_{YYYYMMDD_HHMMSS}_{channel_name} 形式のデフォルトを使う
         safe_title = _sanitizeFilename(reservation.title)
-        start_str = reservation.start_time.astimezone(JST).strftime('%Y%m%d_%H%M%S')
-        # channel_name_display: 通知メッセージに使用するチャンネル名 (サニタイズ済み、先頭の _ なし)
-        # channel_name_suffix: ファイル名に使用するチャンネル名 (先頭に _ を付与)
+        start_time_jst = reservation.start_time.astimezone(JST)
+        # channel_name_display: 通知メッセージとテンプレート変数 {CHANNEL} に使用するチャンネル名 (サニタイズ済み)
         channel_name_display = ''
-        channel_name_suffix = ''
         if reservation.channel_id:
             from app.models.Channel import Channel
             channel = await Channel.get_or_none(id=reservation.channel_id)
             if channel:
                 channel_name_display = _sanitizeFilename(channel.name)
-                channel_name_suffix = '_' + channel_name_display
-        file_name = f'{safe_title}_{start_str}{channel_name_suffix}.m2ts'
+        recording_cfg = Config().recording
+        if recording_cfg.filename_format:
+            # テンプレートへ変数を展開してファイル名ベースを構築する
+            # {TITLE}, {YEAR}, {MONTH}, {DAY}, {HOUR}, {MIN}, {SEC}, {CHANNEL} を置換する
+            # テンプレートの静的文字列部分 (年・月・日 など) はそのまま保持される
+            try:
+                file_base = recording_cfg.filename_format.format_map({
+                    'TITLE': safe_title,
+                    'YEAR': start_time_jst.strftime('%Y'),
+                    'MONTH': start_time_jst.strftime('%m'),
+                    'DAY': start_time_jst.strftime('%d'),
+                    'HOUR': start_time_jst.strftime('%H'),
+                    'MIN': start_time_jst.strftime('%M'),
+                    'SEC': start_time_jst.strftime('%S'),
+                    'CHANNEL': channel_name_display,
+                })
+            except (KeyError, ValueError):
+                # テンプレートが不正な場合はデフォルト形式にフォールバックする
+                logging.warning(
+                    f'MirakurunRecordingTask: Invalid filename_format template, falling back to default. '
+                    f'reservation_id={reservation_id}'
+                )
+                channel_suffix = ('_' + channel_name_display) if channel_name_display else ''
+                file_base = f'{safe_title}_{start_time_jst.strftime("%Y%m%d_%H%M%S")}{channel_suffix}'
+            # テンプレートの静的部分にファイル名として使用できない文字が含まれる場合に備えて除去する
+            file_base = _UNSAFE_FILENAME_RE.sub('_', file_base)
+        else:
+            # デフォルト形式: {title}_{YYYYMMDD_HHMMSS}_{channel_name}
+            channel_suffix = ('_' + channel_name_display) if channel_name_display else ''
+            file_base = f'{safe_title}_{start_time_jst.strftime("%Y%m%d_%H%M%S")}{channel_suffix}'
+        file_name = file_base + '.m2ts'
         output_path = output_dir / file_name
 
         # 同名ファイルが既に存在する場合は連番サフィックスを付与する
@@ -241,7 +270,7 @@ class MirakurunRecordingTask:
                 # 'xb': ファイルが存在しない場合のみ作成 (存在すれば FileExistsError)
                 output_file = open(output_path, 'xb')
             except FileExistsError:
-                output_path = output_dir / f'{safe_title}_{start_str}{channel_name_suffix}_{counter}.m2ts'
+                output_path = output_dir / f'{file_base}_{counter}.m2ts'
                 counter += 1
 
         # Mirakurun 形式のサービス ID を計算
@@ -258,7 +287,8 @@ class MirakurunRecordingTask:
         )
 
         # Mirakurun の Service Stream API に接続してストリームをファイルへ書き込む
-        effective_end = reservation.getEffectiveEndTime()
+        # recording.end_margin_seconds だけ番組終了後も録画を継続し、末尾の音声・映像切れを防ぐ
+        effective_end = reservation.getEffectiveEndTime() + timedelta(seconds=Config().recording.end_margin_seconds)
         session: aiohttp.ClientSession | None = None
         try:
             # X-Mirakurun-Priority: 指定した録画設定の優先度をそのまま渡す (EPGStation の recPriority に相当)

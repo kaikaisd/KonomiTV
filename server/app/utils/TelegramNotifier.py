@@ -142,7 +142,7 @@ class TelegramNotifier:
             {date}        - 放送日付 (YYYY/MM/DD)
             {start_time}  - 放送開始時刻 (HH:MM)
             {end_time}    - 放送終了時刻 (HH:MM)
-            {duration}    - 放送時間 (分)
+            {duration}    - 放送時間 (単位「分」を含む, 例: "60分")
             {description} - 番組概要
             {file_size}   - 録画ファイルサイズ (例: "1.23 GB")
 
@@ -174,7 +174,7 @@ class TelegramNotifier:
                 'date': html.escape(date_str),
                 'start_time': html.escape(start_time_str),
                 'end_time': html.escape(end_time_str),
-                'duration': duration_min,
+                'duration': f'{duration_min}分',
                 'description': html.escape(description),
                 'file_size': html.escape(TelegramNotifier._formatFileSize(file_size)),
             })

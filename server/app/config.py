@@ -15,6 +15,7 @@ import ruamel.yaml.scalarstring
 from pydantic import (
     BaseModel,
     DirectoryPath,
+    Field,
     FilePath,
     PositiveFloat,
     PositiveInt,
@@ -358,8 +359,18 @@ class _ServerSettingsNotification(BaseModel):
     # KonomiTV の公開ベース URL (再生ボタンの URL 生成に使用。空文字列の場合はボタンを省略)
     telegram_base_url: str = ''
     # カスタム通知テンプレート (空文字列の場合はデフォルトの MarkdownV2 形式を使用)
-    # 使用可能な変数: {title} {channel} {start_time} {end_time} {duration} {description} {file_size}
+    # 使用可能な変数: {title} {channel} {date} {start_time} {end_time} {duration}(分付き) {description} {file_size}
     telegram_notification_template: str = ''
+
+class _ServerSettingsRecording(BaseModel):
+    # 録画終了時に番組終了時刻へ加算するマージン (秒)
+    # 番組の公式終了時刻後もこの秒数だけ録画を継続する。末尾の音声・映像切れを防ぐために推奨。
+    # 0 を設定すると番組終了時刻ちょうどに録画を停止する。最大 300 秒。
+    end_margin_seconds: Annotated[int, Field(ge=0, le=300)] = 5
+    # 録画ファイル名のテンプレート (拡張子 .m2ts は自動付与される)
+    # 使用可能な変数: {TITLE} {YEAR} {MONTH} {DAY} {HOUR} {MIN} {SEC} {CHANNEL}
+    # 空文字列の場合は {TITLE}_{YEAR}{MONTH}{DAY}_{HOUR}{MIN}{SEC}_{CHANNEL} 相当のデフォルト形式を使用する
+    filename_format: str = ''
 
 class ServerSettings(BaseModel):
     general: _ServerSettingsGeneral = _ServerSettingsGeneral()
@@ -368,6 +379,7 @@ class ServerSettings(BaseModel):
     video: _ServerSettingsVideo = _ServerSettingsVideo()
     capture: _ServerSettingsCapture = _ServerSettingsCapture()
     notification: _ServerSettingsNotification = _ServerSettingsNotification()
+    recording: _ServerSettingsRecording = _ServerSettingsRecording()
 
 
 # サーバー設定データと読み込み・保存用の関数

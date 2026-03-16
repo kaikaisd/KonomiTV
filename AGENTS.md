@@ -139,7 +139,7 @@ Windows では Windows サービス、Linux では pm2 サービスとして動�
     - `ProcessLimiter.py`: プロセスごとの同時実行数を制限するためのユーティリティクラス
     - `TelegramNotifier.py`: Telegram Bot 経由の録画完了通知送信クラス（サムネイル添付・HTML テンプレート展開・テスト通知対応）
   - `app.py`: FastAPI アプリケーションやルーターの初期化・バックグラウンドタスクの定義
-  - `config.py`: サーバー設定 (`config.yaml`) のロードとバリデーション・`ConfigFileWatcher` による config.yaml ホットリロード
+  - `config.py`: サーバー設定 (`config.yaml`) のロードとバリデーション・`ConfigFileWatcher` による config.yaml ホットリロード（`_ServerSettingsRecording` で録画終了マージン・ファイル名テンプレートを管理）
   - `constants.py`: サーバー全体で用いられるグローバル定数
   - `logging.py`: ロギング設定
   - `schemas.py`: API リクエスト/レスポンス型に用いる Pydantic スキーマ

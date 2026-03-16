@@ -133,5 +133,28 @@ notification:
 
     # 通知メッセージのカスタムテンプレート (空文字列の場合はデフォルトの形式が使用されます)
     # テンプレートは Telegram の HTML モードで送信されます (<b>, <i>, <a href="..."> などが使用可能)
-    # 使用可能な変数: {title} {channel} {start_time} {end_time} {duration} {description} {file_size}
+    # 使用可能な変数: {title} {channel} {date} {start_time} {end_time} {duration}(分付き) {description} {file_size}
     telegram_notification_template: ''
+
+# ================================ 録画エンジンの設定 ================================
+# この設定は Mirakurun バックエンドを使用する録画エンジンにのみ適用されます。
+recording:
+
+    # 録画終了時に番組終了時刻へ加算するマージン (秒)
+    # 番組の公式終了時刻後もこの秒数だけ録画を継続します。
+    # 番組末尾の音声・映像の切れを防ぐために、5 秒程度の設定を推奨します。
+    # 0 に設定すると番組終了時刻ちょうどに録画を停止します。最大 300 秒まで設定できます。
+    end_margin_seconds: 5
+
+    # 録画ファイル名のテンプレート (拡張子 .m2ts は自動的に付与されます)
+    # 空文字列の場合は "{TITLE}_{YYYYMMDD_HHMMSS}_{CHANNEL}" 相当のデフォルト形式が使われます。
+    # 使用可能な変数:
+    #   {TITLE}   - 番組タイトル
+    #   {YEAR}    - 放送年 (4桁, 例: 2026)
+    #   {MONTH}   - 放送月 (2桁, 例: 03)
+    #   {DAY}     - 放送日 (2桁, 例: 17)
+    #   {HOUR}    - 放送開始時 (2桁, 例: 21)
+    #   {MIN}     - 放送開始分 (2桁, 例: 00)
+    #   {SEC}     - 放送開始秒 (2桁, 例: 00)
+    #   {CHANNEL} - チャンネル名 (不明な場合は空文字列)
+    filename_format: '{YEAR}年{MONTH}月{DAY}日{HOUR}時{MIN}分{SEC}秒 - {TITLE}'
