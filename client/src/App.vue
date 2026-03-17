@@ -4,37 +4,11 @@
             <component :is="Component" />
         </router-view>
         <Snackbars />
-        <!-- Cloudflare Access セッション切れグローバルバナー -->
-        <!-- timeout="-1" で自動消去なし、ページ遷移後も表示し続ける -->
-        <v-snackbar
-            v-model="cfSessionExpiredState"
-            :timeout="-1"
-            location="top"
-            color="error"
-            class="cf-session-expired-snackbar"
-        >
-            <span>Cloudflare Access のセッションが期限切れです。再認証が必要です。</span>
-            <template #actions>
-                <v-btn variant="text" @click="onReAuthenticate">
-                    再認証する
-                </v-btn>
-            </template>
-        </v-snackbar>
     </v-app>
 </template>
 <script lang="ts" setup>
 
 import Snackbars from '@/components/Snackbars.vue';
-import { cfSessionExpiredState } from '@/services/APIClient';
-
-/**
- * 再認証ボタンのハンドラ
- * ページをリロードすることで Cloudflare Access の認証フローが開始され、
- * 認証完了後に元の URL に戻ってくる
- */
-function onReAuthenticate(): void {
-    window.location.reload();
-}
 
 </script>
 <style lang="scss">

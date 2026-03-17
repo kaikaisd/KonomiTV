@@ -231,6 +231,8 @@ import { ProgramUtils } from '@/utils/ProgramUtils';
 const props = defineProps<{
     modelValue: boolean;
     condition: IReservationCondition | null;
+    // 新規追加モード時にキーワード欄に初期値を設定する (番組詳細ドロワーからの呼び出し用)
+    initialKeyword?: string;
 }>();
 
 const emit = defineEmits<{
@@ -586,6 +588,11 @@ watch(() => props.modelValue, async (opened) => {
     } else {
         // 追加モード: デフォルト値でフォームをリセットする
         form.value = defaultSearchCondition();
+        // initialKeyword が指定されている場合はキーワード欄に初期値を設定する
+        if (props.initialKeyword) {
+            form.value.keyword = props.initialKeyword;
+            form.value.is_title_only = true;
+        }
         recordSettings.value = JSON.parse(JSON.stringify(IRecordSettingsDefault));
     }
 

@@ -21,11 +21,13 @@ DESCRIPTION_MAX_LENGTH = 500
 
 # カスタムテンプレートのデフォルト値 (フロントエンドのプレースホルダーとして表示する)
 # {変数名} 形式のプレースホルダーを使用する。変数値は HTML エスケープされた上で HTML モードで送信される
+# {warning}: 一部録画など録画上の警告がある場合にのみ内容が入る。警告がない場合は空文字列になる
 DEFAULT_NOTIFICATION_TEMPLATE = (
     '📺 <b>{title}</b>\n'
     '📡 {channel}  |  🕐 {start_time}〜{end_time} ({duration}分)\n'
     '📝 {description}\n'
     '💾 録画サイズ: {file_size}'
+    '{warning}'
 )
 
 
@@ -78,6 +80,7 @@ class TelegramNotifier:
         duration_min: int,
         description: str,
         file_size: int,
+        is_partially_recorded: bool = False,
     ) -> str:
         """
         通知メッセージの本文 (MarkdownV2 形式) を組み立てる。
@@ -90,6 +93,7 @@ class TelegramNotifier:
             duration_min (int): 放送時間 (分)
             description (str): 番組概要
             file_size (int): 録画ファイルサイズ (バイト)
+            is_partially_recorded (bool): 一部のみ録画された場合は True
 
         Returns:
             str: MarkdownV2 形式の通知本文
@@ -117,6 +121,10 @@ class TelegramNotifier:
             lines.append(f'📝 {escaped_description}')
         lines.append(f'💾 録画サイズ: {escaped_size}')
 
+        # 一部のみ録画の場合は警告を追加する
+        if is_partially_recorded:
+            lines.append(TelegramNotifier._escapeMarkdownV2('⚠️ 一部のみ録画'))
+
         return '\n'.join(lines)
 
     @staticmethod
@@ -130,6 +138,7 @@ class TelegramNotifier:
         duration_min: int,
         description: str,
         file_size: int,
+        is_partially_recorded: bool = False,
     ) -> tuple[str, str]:
         """
         カスタムテンプレートから通知本文 (HTML モード) を組み立てる。
@@ -167,6 +176,9 @@ class TelegramNotifier:
 
         # 各変数値を HTML エスケープしてからテンプレートへ埋め込む
         # これにより、タイトルや概要に含まれる <>&" などが Telegram HTML モードで誤解釈されるのを防ぐ
+        # 一部のみ録画の場合は警告文字列を組み立てる (先頭に改行を付けてブロックの末尾に自然に追記されるようにする)
+        warning_text = '\n⚠️ 一部のみ録画' if is_partially_recorded else ''
+
         try:
             text = template.format_map({
                 'title': html.escape(title),
@@ -177,6 +189,7 @@ class TelegramNotifier:
                 'duration': f'{duration_min}分',
                 'description': html.escape(description),
                 'file_size': html.escape(TelegramNotifier._formatFileSize(file_size)),
+                'warning': warning_text,
             })
         except (KeyError, ValueError) as ex:
             # テンプレートの書式が不正な場合はそのまま送信してエラーを記録する
@@ -201,6 +214,7 @@ class TelegramNotifier:
         recorded_program_id: int,
         base_url: str,
         notification_template: str = '',
+        is_partially_recorded: bool = False,
     ) -> bool:
         """
         録画完了通知を Telegram に送信する。
@@ -240,6 +254,7 @@ class TelegramNotifier:
                 duration_min = duration_min,
                 description = description,
                 file_size = file_size,
+                is_partially_recorded = is_partially_recorded,
             )
         else:
             caption = TelegramNotifier._buildCaption(
@@ -250,6 +265,7 @@ class TelegramNotifier:
                 duration_min = duration_min,
                 description = description,
                 file_size = file_size,
+                is_partially_recorded = is_partially_recorded,
             )
             parse_mode = 'MarkdownV2'
 

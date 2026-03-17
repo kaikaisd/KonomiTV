@@ -85,6 +85,12 @@
                     <Icon icon="fluent:timer-16-regular" width="20px" height="20px" />
                     <span class="ml-1">予約を追加</span>
                 </v-btn>
+                <!-- Mirakurun バックエンドのみ: 自動予約ルール追加ボタン -->
+                <v-btn v-if="!isEDCBBackend && displayProgram" class="px-3" variant="text"
+                    @click="showAddRuleDialog = true">
+                    <Icon icon="fluent:molecule-16-regular" width="20px" height="20px" />
+                    <span class="ml-1">ルールを追加</span>
+                </v-btn>
             </div>
         </div>
         <!-- 過去番組の場合は閉じるボタンのみ表示 -->
@@ -93,6 +99,12 @@
                 <v-btn class="px-3" variant="text" @click="handleClose">
                     <Icon icon="fluent:dismiss-16-regular" width="20px" height="20px" />
                     <span class="ml-1">閉じる</span>
+                </v-btn>
+                <!-- Mirakurun バックエンドのみ・過去番組: 自動予約ルール追加ボタン -->
+                <v-btn v-if="!isEDCBBackend && displayProgram" class="px-3" variant="text"
+                    @click="showAddRuleDialog = true">
+                    <Icon icon="fluent:molecule-16-regular" width="20px" height="20px" />
+                    <span class="ml-1">ルールを追加</span>
                 </v-btn>
             </div>
         </div>
@@ -175,11 +187,18 @@
             </v-card-actions>
         </v-card>
     </v-dialog>
+
+    <!-- 自動予約ルール追加ダイアログ (番組タイトルをキーワードに初期設定) -->
+    <ReservationConditionEditDialog
+        v-model="showAddRuleDialog"
+        :condition="null"
+        :initial-keyword="displayProgram?.title ?? ''" />
 </template>
 <script lang="ts" setup>
 
 import { ref, computed, watch, onMounted } from 'vue';
 
+import ReservationConditionEditDialog from '@/components/Reservations/ReservationConditionEditDialog.vue';
 import ReservationProgramInfo from '@/components/Reservations/ReservationProgramInfo.vue';
 import ReservationRecordingSettings from '@/components/Reservations/ReservationRecordingSettings.vue';
 import Message from '@/message';
@@ -241,6 +260,9 @@ const showDeleteDialog = ref(false);
 
 // 閉じる確認ダイアログの表示状態
 const showCloseConfirmDialog = ref(false);
+
+// ルール追加ダイアログの表示状態
+const showAddRuleDialog = ref(false);
 
 // 録画設定プリセット一覧 (EDCB バックエンド時のみ取得される)
 const presets = ref<IRecordSettingsPresets | null>(null);

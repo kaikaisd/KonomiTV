@@ -503,6 +503,15 @@ class MirakurunRecordingTask:
             except OSError:
                 pass
 
+            # RecordedProgram から is_partially_recorded を取得する。
+            # DB に登録済みの場合のみ参照し、未登録時は False にフォールバックする。
+            is_partially_recorded = False
+            if recorded_program_id:
+                from app.models.RecordedProgram import RecordedProgram
+                recorded_program = await RecordedProgram.get_or_none(id=recorded_program_id)
+                if recorded_program is not None:
+                    is_partially_recorded = recorded_program.is_partially_recorded
+
             # 放送時間を HH:MM 形式でフォーマット
             start_jst = start_time.astimezone(JST)
             start_str = start_jst.strftime('%H:%M')
@@ -526,6 +535,7 @@ class MirakurunRecordingTask:
                 recorded_program_id = recorded_program_id,
                 base_url = cfg.telegram_base_url,
                 notification_template = cfg.telegram_notification_template,
+                is_partially_recorded = is_partially_recorded,
             )
 
         except asyncio.CancelledError:

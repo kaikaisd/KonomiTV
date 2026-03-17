@@ -76,6 +76,16 @@
                         <Icon class="navigation__link-icon" icon="fluent:settings-20-regular" width="26px" />
                         <span v-if="!iconOnly" class="navigation__link-text">設定</span>
                     </router-link>
+                    <!-- Cloudflare Access セッション切れ再認証ボタン: CF セッションが期限切れの場合のみ表示する -->
+                    <a v-if="cfSessionExpired" v-ripple class="navigation__link navigation__link--cf-expired"
+                        :class="{
+                            'navigation__link--icon-only': iconOnly,
+                        }"
+                        v-ftooltip.right="iconOnly ? 'CF Accessセッション切れ: 再認証が必要です' : ''"
+                        @click.prevent="reAuthenticate">
+                        <Icon class="navigation__link-icon" icon="fluent:key-16-regular" width="22px" />
+                        <span v-if="!iconOnly" class="navigation__link-text">CF Access 再認証</span>
+                    </a>
                     <!-- Cloudflare Access のログアウトボタン: CF Access 経由でログインしている場合のみ表示する -->
                     <!-- /cdn-cgi/access/logout にリダイレクトすることでセッションを終了する -->
                     <a v-if="isCloudflareAccess" v-ripple class="navigation__link" href="/cdn-cgi/access/logout"
@@ -111,6 +121,7 @@ import { mapStores } from 'pinia';
 import { defineComponent } from 'vue';
 
 import BottomNavigation from '@/components/BottomNavigation.vue';
+import { cfSessionExpiredState } from '@/services/APIClient';
 import useVersionStore from '@/stores/VersionStore';
 
 export default defineComponent({
@@ -135,6 +146,17 @@ export default defineComponent({
     },
     computed: {
         ...mapStores(useVersionStore),
+        // Cloudflare Access のセッションが期限切れかどうか
+        // cfSessionExpiredState は APIClient で管理するモジュールレベルのリアクティブフラグ
+        cfSessionExpired(): boolean {
+            return cfSessionExpiredState.value;
+        },
+    },
+    methods: {
+        // CF Access 再認証: ページをリロードして CF Access の認証フローを開始する
+        reAuthenticate(): void {
+            window.location.reload();
+        },
     },
     async created() {
         await this.versionStore.fetchServerVersion();
@@ -272,6 +294,13 @@ export default defineComponent({
                 }
                 &--highlight {
                     color: rgb(var(--v-theme-secondary-lighten-1));
+                }
+                // CF Access セッション切れ: エラー色で強調表示する
+                &--cf-expired {
+                    color: rgb(var(--v-theme-error));
+                    &:hover {
+                        background: rgba(var(--v-theme-error), 0.12);
+                    }
                 }
                 &--develop-version {
                     font-size: 15px;
