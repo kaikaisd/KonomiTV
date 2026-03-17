@@ -11,7 +11,7 @@ import aiohttp
 
 from app import logging
 from app.config import Config, ReadCurrentConfig
-from app.constants import API_REQUEST_HEADERS, JST
+from app.constants import API_REQUEST_HEADERS, JST, THUMBNAILS_DIR
 from app.models.MirakurunReservation import MirakurunReservation
 from app.utils import GetMirakurunAPIEndpointURL
 from app.utils.TelegramNotifier import TelegramNotifier
@@ -446,15 +446,10 @@ class MirakurunRecordingTask:
             return
 
         try:
-            # RecordedVideo レコードが DB に登録され、全バックグラウンド解析が完了するのを待つ
-            # バックグラウンド解析は KeyFrameAnalyzer / CMSectionsDetector / ThumbnailGenerator の
-            # 3 タスクを asyncio.gather で並列実行し、最も時間のかかるキーフレーム解析が終わると全完了する。
-            # それぞれの完了指標:
-            #   key_frames が非空     → キーフレーム解析完了 (最も遅い: 録画長に依存、数分かかることがある)
-            #   cm_sections is not None → CM 区間検出完了 (高速)
-            #   thumbnail_info is not None → サムネイル生成完了 (中程度)
-            # 全解析完了の主判定として key_frames 非空を使い、
-            # キーフレーム解析失敗時のフォールバックとして thumbnail_info の設定有無を確認する。
+            # RecordedVideo レコードが DB に登録され、サムネイルファイルがディスク上に生成されるのを待つ。
+            # ThumbnailGenerator がサムネイル (.webp) をディスクに書き込んだ後 thumbnail_info を DB に保存する順序で動作するため、
+            # ファイルの存在確認が最も確実な「サムネイル生成完了」の判定となる。
+            # これにより通知には必ずサムネイルが添付される。
             # 最大 600 秒 (10 分) まで 5 秒ごとにポーリングする。
             import anyio as _anyio
 
@@ -481,24 +476,23 @@ class MirakurunRecordingTask:
                 if recorded_video is not None:
                     file_hash = recorded_video.file_hash
                     recorded_program_id = recorded_video.recorded_program_id
-                    # 全バックグラウンド解析完了の確認:
-                    # キーフレームが設定済み (主判定) か、キーフレーム解析が失敗した場合のフォールバックとして
-                    # サムネイル情報が DB に保存済みであれば全解析完了とみなす
-                    all_analysis_done = (
-                        len(recorded_video.key_frames) > 0 or
-                        recorded_video.thumbnail_info is not None
-                    )
-                    if all_analysis_done:
+                    # サムネイルファイルがディスク上に存在するかを直接確認する
+                    # ThumbnailGenerator はファイルを書き込んだ後に thumbnail_info を DB に保存するため、
+                    # ファイルの存在確認が最も確実な「サムネイル生成完了」の判定になる。
+                    # 旧ロジックは key_frames 非空を主判定としていたが、キーフレーム解析完了時点では
+                    # サムネイルがまだ生成されていない可能性があり、通知にサムネイルが付かないことがあった。
+                    thumbnail_path = Path(str(THUMBNAILS_DIR)) / f'{file_hash}.webp'
+                    if thumbnail_path.exists():
                         logging.info(
-                            f'MirakurunRecordingTask: Background analysis completed for reservation_id={reservation_id}, '
+                            f'MirakurunRecordingTask: Thumbnail is ready for reservation_id={reservation_id}, '
                             'sending notification.'
                         )
                         break
             else:
-                # タイムアウト: 解析が終わらなくてもサムネイルの有無に応じて通知を送信する
+                # タイムアウト: サムネイルが生成されなくてもテキスト通知を送信する
                 logging.warning(
-                    f'MirakurunRecordingTask: Timed out waiting for background analysis for '
-                    f'reservation_id={reservation_id}. Sending notification with available data.'
+                    f'MirakurunRecordingTask: Timed out waiting for thumbnail for '
+                    f'reservation_id={reservation_id}. Sending notification without thumbnail.'
                 )
 
             # ファイルサイズを取得する (録画完了後にファイルが存在すれば stat で取得、なければ書き込みバイト数を使う)
