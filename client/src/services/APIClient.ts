@@ -5,29 +5,10 @@
  */
 
 import axios, { AxiosError, AxiosRequestConfig, AxiosResponse, AxiosResponseHeaders, RawAxiosResponseHeaders } from 'axios';
-import { ref } from 'vue';
 
 import Message from '@/message';
 import useUserStore from '@/stores/UserStore';
 import Utils from '@/utils';
-
-/**
- * Cloudflare Tunnel 経由のアクセスであることが確認されたかどうかを保持するフラグ。
- * レスポンスに CF-Ray ヘッダーが含まれていた場合に true になる。
- * CF-Ray ヘッダーは Cloudflare がプロキシしたすべてのレスポンスに必ず付与されるため、
- * LAN 直接アクセスとの確実な区別に使用できる。
- * true になったら false には戻さない (ページリロードで解消されるため)。
- */
-export const cfTunnelDetected = ref(false);
-
-/**
- * Cloudflare Access のセッション切れ状態を保持するリアクティブなフラグ。
- * App.vue がこれを watch してグローバルな再認証バナーを表示する。
- * cfTunnelDetected が true かつ CF Access が HTML 403 を返した場合のみ true になる。
- * CF_Authorization クッキーの有無・内容は判定に使用しない (残留クッキーによる誤検知を防ぐ)。
- * true にしたら false には戻さない (ページリロードで解消されるため)。
- */
-export const cfSessionExpiredState = ref(false);
 
 
 /** API リクエスト成功時のレスポンスを表すインターフェイス */
@@ -123,34 +104,6 @@ class APIClient {
             // エラーレスポンスがあれば、エラー内容と AxiosError を IErrorResponse に入れて返す
             if (result.response) {
 
-                // CF-Ray ヘッダーが存在する場合は Cloudflare Tunnel 経由のアクセスと確定させる
-                // CF-Ray ヘッダーは Cloudflare がプロキシしたすべてのレスポンスに付与される固有ヘッダー
-                // このフラグを立てることで LAN 直接アクセス時に CF セッション切れバナーが表示されないようにする
-                if (result.response.headers['cf-ray'] !== undefined) {
-                    cfTunnelDetected.value = true;
-                }
-
-                // 403 受信時: Cloudflare Access のセッション切れかどうかを判定する
-                if (result.response.status === 403 && cfTunnelDetected.value) {
-                    // CF Tunnel 経由と確定している場合のみ判定を行う。
-                    // cfTunnelDetected は CF-Ray ヘッダーが一度でも確認された場合に true になるため、
-                    // LAN 直接アクセスや古い CF_Authorization クッキーが残存している場合でも
-                    // このブロックは実行されず、誤って再認証バナーが表示されることはない。
-                    // KonomiTV API は常に JSON を返すが、CF Access のブロックページは HTML を返すため、
-                    // レスポンスが HTML かどうかで CF によるインターセプトを検出する。
-                    // クッキーの有無・内容は判定に使用しない (残留クッキーによる誤検知を防ぐため)。
-                    const isCFHtmlResponse = (
-                        typeof result.response.data === 'string' ||
-                        (result.response.headers['content-type'] as string | undefined)?.includes('text/html') === true
-                    );
-
-                    if (isCFHtmlResponse) {
-                        // App.vue のグローバルバナーを表示する
-                        // true にしたら false には戻さない (ページリロードで解消されるため)
-                        cfSessionExpiredState.value = true;
-                    }
-                }
-
                 return {
                     type: 'error',
                     status: result.response.status,
@@ -172,11 +125,6 @@ class APIClient {
 
         // 正常にレスポンスが返ってきた場合は ISuccessResponse を返す
         } else {
-            // CF-Ray ヘッダーが存在する場合は Cloudflare Tunnel 経由のアクセスと確定させる
-            // 成功レスポンスからも検出することで、403 が発生する前に CF 環境を認識できる
-            if (result.headers['cf-ray'] !== undefined) {
-                cfTunnelDetected.value = true;
-            }
             return {
                 type: 'success',
                 headers: result.headers,

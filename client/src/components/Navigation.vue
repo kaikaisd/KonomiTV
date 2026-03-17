@@ -121,7 +121,6 @@ import { mapStores } from 'pinia';
 import { defineComponent } from 'vue';
 
 import BottomNavigation from '@/components/BottomNavigation.vue';
-import { cfSessionExpiredState } from '@/services/APIClient';
 import useVersionStore from '@/stores/VersionStore';
 
 export default defineComponent({
@@ -139,18 +138,20 @@ export default defineComponent({
     },
     data() {
         return {
-            // Cloudflare Access 経由でログインしているかどうか
-            // /cdn-cgi/access/get-identity が 200 を返せば CF Access が有効と判断する
+            // Cloudflare Access 経由で認証済みかどうか
+            // /cdn-cgi/access/get-identity が 200 を返せば認証済みと判断する
             isCloudflareAccess: false,
+            // CF Access が存在するが未認証 (セッション切れ) の状態かどうか
+            // /cdn-cgi/access/get-identity が 200 以外の HTTP レスポンスを返した場合に true になる。
+            // CF Access が導入されていない環境では fetch 自体が失敗するか 404 が返るため false のまま。
+            // NOTE: API リクエストが CF Access にブロックされると CORS エラーになりレスポンスが取得できないため、
+            //       APIClient 側のレスポンスヘッダー監視ではなく、/cdn-cgi/access/get-identity の HTTP
+            //       ステータスコードを直接確認することで確実な検知を実現している。
+            cfSessionExpired: false,
         };
     },
     computed: {
         ...mapStores(useVersionStore),
-        // Cloudflare Access のセッションが期限切れかどうか
-        // cfSessionExpiredState は APIClient で管理するモジュールレベルのリアクティブフラグ
-        cfSessionExpired(): boolean {
-            return cfSessionExpiredState.value;
-        },
     },
     methods: {
         // CF Access 再認証: ページをリロードして CF Access の認証フローを開始する
@@ -160,14 +161,28 @@ export default defineComponent({
     },
     async created() {
         await this.versionStore.fetchServerVersion();
-        // Cloudflare Access が有効かどうかを確認する
-        // CF Access 経由でログインしていれば /cdn-cgi/access/get-identity が 200 を返す
-        // CF Access を使っていない環境では 404 等が返るためフラグは false のままになる
+        // /cdn-cgi/access/get-identity の HTTP ステータスで CF Access の状態を判別する:
+        //   200     → CF Access 認証済み: ログアウトボタンを表示する
+        //   非200   → CF Access が存在するが未認証: 再認証ボタンを表示する
+        //   例外発生 → CF Access なし (LAN 直接アクセス等): どちらも表示しない
+        // CF Access が未認証の場合、API リクエストは CF Access のログインページへ CORS リダイレクトされるため
+        // Axios のレスポンスオブジェクトが取得できず APIClient 側での検知が不可能。
+        // そのためここで fetch() を使って直接確認するのが最も確実な手段となる。
         try {
             const response = await fetch('/cdn-cgi/access/get-identity');
-            this.isCloudflareAccess = response.ok;
+            if (response.ok) {
+                // 200: 認証済み
+                this.isCloudflareAccess = true;
+                this.cfSessionExpired = false;
+            } else {
+                // 400 / 403 等: CF Access は存在するが未認証
+                this.isCloudflareAccess = false;
+                this.cfSessionExpired = true;
+            }
         } catch {
+            // ネットワークエラーまたは CF Access が導入されていない環境
             this.isCloudflareAccess = false;
+            this.cfSessionExpired = false;
         }
     }
 });
