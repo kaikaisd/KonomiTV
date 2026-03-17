@@ -14,8 +14,9 @@ import { dayjs } from '@/utils';
 
 /**
  * チャンネルタイプの表示順序
+ * 'すべて' は全チャンネルを一括表示する特殊な選択肢で、常に先頭に配置する
  */
-export const CHANNEL_TYPE_DISPLAY_ORDER: ChannelTypePretty[] = ['ピン留め', '地デジ', 'BS', 'CS', 'CATV', 'SKY', 'BS4K'];
+export const CHANNEL_TYPE_DISPLAY_ORDER: ChannelTypePretty[] = ['すべて', 'ピン留め', '地デジ', 'BS', 'CS', 'CATV', 'SKY', 'BS4K'];
 
 /**
  * 表示名から API 用チャンネルタイプへのマッピング (ChannelTypePretty -> ChannelType)
@@ -218,6 +219,7 @@ const useTimeTableStore = defineStore('timetable', () => {
     /**
      * ChannelsStore の channels_list_with_pinned から利用可能なチャンネルタイプを取得する computed
      * これにより、チャンネルタイプを切り替えても available_channel_types は変化しない
+     * 'すべて' は常に先頭に追加される (全チャンネルを一括表示する特殊な選択肢)
      */
     const available_channel_types = computed<Set<ChannelTypePretty>>(() => {
         const types = new Set<ChannelTypePretty>();
@@ -226,6 +228,9 @@ const useTimeTableStore = defineStore('timetable', () => {
         if (channels_store.is_channels_list_initial_updated === false) {
             return types;
         }
+
+        // 'すべて' は常に先頭に追加 (channel_type を指定しない API 呼び出しに対応)
+        types.add('すべて');
 
         // channels_list_with_pinned の各キーを追加
         // ChannelsStore 側で既にチャンネルが0のタイプは削除されているので、そのまま使える
@@ -266,17 +271,12 @@ const useTimeTableStore = defineStore('timetable', () => {
 
     /**
      * デフォルトのチャンネルタイプを取得する
-     * ピン留めがあればピン留め、なければ地デジ、それもなければ最初に存在するタイプ
+     * 'すべて' が利用可能な場合は 'すべて'、なければ表示順序に従って最初に存在するタイプ
      */
     function getDefaultChannelType(): ChannelTypePretty {
-        // ピン留めチャンネルが存在する場合はピン留め
-        if (available_channel_types.value.has('ピン留め')) {
-            return 'ピン留め';
-        }
-
-        // 地デジが存在する場合は地デジ
-        if (available_channel_types.value.has('地デジ')) {
-            return '地デジ';
+        // 'すべて' が利用可能な場合は常にデフォルトとして使用
+        if (available_channel_types.value.has('すべて')) {
+            return 'すべて';
         }
 
         // それ以外の場合は表示順序に従って最初に存在するタイプを返す
@@ -286,8 +286,8 @@ const useTimeTableStore = defineStore('timetable', () => {
             }
         }
 
-        // どれも存在しない場合は地デジを返す（API が空を返すことになる）
-        return '地デジ';
+        // どれも存在しない場合は 'すべて' を返す（API が空を返すことになる）
+        return 'すべて';
     }
 
 
@@ -317,7 +317,7 @@ const useTimeTableStore = defineStore('timetable', () => {
         const actual_start_time = start_time ?? getDisplayStartTime();
         // 36時間表示モードの場合は翌々日4時まで取得 (16:00 + 36時間)
         const actual_end_time = end_time ?? getDayEndTime(actual_start_time, is_36hour_display.value);
-        const actual_channel_type = channel_type ?? selected_channel_type.value ?? '地デジ';
+        const actual_channel_type = channel_type ?? selected_channel_type.value ?? 'すべて';
 
         // ピン留めの場合はチャンネル ID リストを使用
         const actual_pinned_channel_ids = actual_channel_type === 'ピン留め'
@@ -325,6 +325,8 @@ const useTimeTableStore = defineStore('timetable', () => {
             : undefined;
 
         // ChannelTypePretty から API 用の ChannelType に変換
+        // 'すべて' の場合は undefined (CHANNEL_TYPE_PRETTY_TO_API に含まれないため自然に undefined になる)
+        // これにより API は channel_type パラメータなしで呼び出され、全チャンネルタイプが返される
         const api_channel_type = CHANNEL_TYPE_PRETTY_TO_API.get(actual_channel_type);
 
         // API リクエストを実行 (Programs サービスを使用)

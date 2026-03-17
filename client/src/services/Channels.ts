@@ -7,7 +7,8 @@ import { IProgram, IProgramDefault } from '@/services/Programs';
 export type ChannelType = 'GR' | 'BS' | 'CS' | 'CATV' | 'SKY' | 'BS4K';
 
 // チャンネルタイプの型 (実際のチャンネルリストに表示される表現)
-export type ChannelTypePretty = 'ピン留め' | '地デジ' | 'BS' | 'CS' | 'CATV' | 'SKY' | 'BS4K';
+// 'すべて' は全チャンネルタイプを一括表示する特殊な選択肢 (API では channel_type 未指定に対応)
+export type ChannelTypePretty = 'すべて' | 'ピン留め' | '地デジ' | 'BS' | 'CS' | 'CATV' | 'SKY' | 'BS4K';
 
 /** 地デジ放送エリアの型 (北海道は7分割、計53選択肢) */
 export type TerrestrialRegion =
