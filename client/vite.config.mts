@@ -126,6 +126,14 @@ export default defineConfig({
                 navigateFallbackDenylist: [/^\/api/, /^\/cdn-cgi/],
                 // キャッシュするファイルの最大サイズ
                 maximumFileSizeToCacheInBytes: 1024 * 1024 * 15,  // 15MB
+                // manifest.webmanifest を precache の対象から除外する
+                // Cloudflare Access 環境では SW インストール時の precache フェーズで
+                // manifest.webmanifest が CF Access にブロックされ CORS エラーになる。
+                // workbox はこの失敗を受けて SW インストールをリトライし続けるため
+                // manifest 取得の CORS エラーが無限ループになる。
+                // precache から外すことでブラウザが manifest を直接取得するようになり、
+                // ループを防止できる (manifest の内容は公開情報のため除外しても問題ない)。
+                globIgnores: ['**/manifest.webmanifest'],
             }
         }),
     ],
