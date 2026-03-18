@@ -209,11 +209,12 @@ async def ValidateTelegramTemplateAPI(
             'duration': '60分',
             'description': html_module.escape('これはサンプルの番組概要です。テンプレートが正しく機能しているか確認できます。'),
             'file_size': html_module.escape('2.34 GB'),
+            'warning': '',
         })
     except KeyError as ex:
         raise HTTPException(
             status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail = f'Unknown variable in template: {ex}. Available variables: {{title}}, {{channel}}, {{start_time}}, {{end_time}}, {{duration}}, {{description}}, {{file_size}}',
+            detail = f'Unknown variable in template: {ex}. Available variables: {{title}}, {{channel}}, {{date}}, {{start_time}}, {{end_time}}, {{duration}}, {{description}}, {{file_size}}, {{warning}}',
         )
     except ValueError as ex:
         raise HTTPException(

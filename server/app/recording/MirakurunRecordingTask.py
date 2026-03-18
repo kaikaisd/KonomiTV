@@ -538,6 +538,20 @@ class MirakurunRecordingTask:
                 is_partially_recorded = is_partially_recorded,
             )
 
+            # 通知送信完了後、予約ステータスが Completed になっていることを確認・保証する。
+            # _recordStream では録画完了直後に Completed を保存しているが、asyncio のキャンセル
+            # タイミングによっては Failed に上書きされる可能性がある。通知が正常に送信された以上、
+            # 録画自体は成功しているため、ここで Completed に正し直す。
+            reservation_after = await MirakurunReservation.get_or_none(id=reservation_id)
+            if reservation_after is not None and reservation_after.status != 'Completed':
+                wrong_status = reservation_after.status
+                reservation_after.status = 'Completed'  # type: ignore[assignment]
+                await reservation_after.save()
+                logging.info(
+                    f'MirakurunRecordingTask: Status corrected to Completed after notification '
+                    f'for reservation_id={reservation_id} (was: {wrong_status}).'
+                )
+
         except asyncio.CancelledError:
             # サーバーシャットダウン時など: キャンセルは再送出して asyncio に伝える
             raise

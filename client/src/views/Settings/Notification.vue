@@ -79,7 +79,8 @@
                         <code>{end_time}</code> 放送終了時刻 &nbsp;
                         <code>{duration}</code> 放送時間 (例: 60分) &nbsp;
                         <code>{description}</code> 番組概要 &nbsp;
-                        <code>{file_size}</code> 録画サイズ
+                        <code>{file_size}</code> 録画サイズ &nbsp;
+                        <code>{warning}</code> 録画警告 (一部のみ録画の場合に警告テキスト、それ以外は空欄)
                     </div>
                     <v-textarea class="settings__item-form" color="primary" variant="outlined" hide-details
                         :density="is_form_dense ? 'compact' : 'default'"

@@ -1658,6 +1658,12 @@ class RecordedScanTask:
                         if ((now - current_modified).total_seconds() >= self.RECORDING_COMPLETE_SECONDS and
                             current_size == recording_info.file_size):
                             completed_files.append(file_path)
+                        elif current_size != recording_info.file_size:
+                            # ファイルサイズが recording_info と異なる場合は次回チェック用に更新する。
+                            # watchfiles のイベント処理が最終書き込みに追いつかず recording_info.file_size が
+                            # 実際のファイルサイズより小さいまま残ると完了検知が永遠に失敗するため、ここで補正する。
+                            # 次回のチェック時に mtime が RECORDING_COMPLETE_SECONDS 秒以上前であれば完了と判断される。
+                            recording_info.file_size = current_size
                     except FileNotFoundError:
                         # ファイルが削除された場合は記録から削除
                         completed_files.append(file_path)
