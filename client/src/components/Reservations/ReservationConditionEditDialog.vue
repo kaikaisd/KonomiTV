@@ -45,29 +45,43 @@
                 <!-- チャンネル選択 -->
                 <div class="condition-edit-dialog__section-title mb-1">対象チャンネル</div>
                 <div class="condition-edit-dialog__section-hint mb-2">
-                    選択なしの場合はすべてのチャンネルが対象になります。グループをクリックすると一括選択、個別チャンネルをクリックすると個別選択できます。
+                    選択なしの場合はすべてのチャンネルが対象になります。グループをクリックすると一括選択、行をクリックすると個別選択できます。
                 </div>
                 <div v-if="isChannelsLoading" class="mb-3">
                     <v-progress-circular indeterminate color="primary" size="20" />
                 </div>
                 <div v-else class="mb-3">
-                    <!-- タイプ別一括選択チップ -->
-                    <v-chip v-for="type in availableChannelTypes" :key="type"
-                        :color="isTypePartiallySelected(type) ? 'primary' : 'default'"
-                        :variant="isTypeFullySelected(type) ? 'flat' : isTypePartiallySelected(type) ? 'tonal' : 'outlined'"
-                        class="mr-1 mb-2" @click="toggleChannelType(type)" style="cursor: pointer;">
-                        {{ channelTypeLabel(type) }}
-                        <span class="condition-edit-dialog__chip-count">{{ channelsList[type].filter(c => !c.is_radiochannel).length }}</span>
-                    </v-chip>
-                    <!-- 個別チャンネル選択チップ -->
-                    <div class="condition-edit-dialog__channel-list">
+                    <!-- タイプ別一括選択ボタン -->
+                    <div class="condition-edit-dialog__type-row mb-2">
+                        <button v-for="type in availableChannelTypes" :key="type"
+                            class="condition-edit-dialog__type-btn"
+                            :class="{
+                                'condition-edit-dialog__type-btn--full': isTypeFullySelected(type),
+                                'condition-edit-dialog__type-btn--partial': isTypePartiallySelected(type) && !isTypeFullySelected(type),
+                            }"
+                            @click="toggleChannelType(type)">
+                            {{ channelTypeLabel(type) }}
+                        </button>
+                    </div>
+                    <!-- 個別チャンネル選択リスト -->
+                    <div class="condition-edit-dialog__channel-listbox">
                         <template v-for="type in availableChannelTypes" :key="type">
-                            <v-chip v-for="ch in channelsList[type].filter(c => !c.is_radiochannel)" :key="channelKey(ch)"
-                                :color="isChannelSelected(ch) ? 'primary' : 'default'"
-                                :variant="isChannelSelected(ch) ? 'flat' : 'outlined'"
-                                size="small" class="mr-1 mb-1" @click="toggleChannel(ch)" style="cursor: pointer;">
-                                {{ ch.name }}
-                            </v-chip>
+                            <!-- タイプ区切りヘッダー -->
+                            <div class="condition-edit-dialog__channel-type-header">
+                                {{ channelTypeLabel(type) }}
+                            </div>
+                            <div v-for="ch in channelsList[type].filter((c: ILiveChannel) => !c.is_radiochannel)" :key="channelKey(ch)"
+                                class="condition-edit-dialog__channel-option"
+                                :class="{ 'condition-edit-dialog__channel-option--selected': isChannelSelected(ch) }"
+                                @click="toggleChannel(ch)">
+                                <img class="condition-edit-dialog__channel-icon" loading="lazy" decoding="async"
+                                    :src="`${Utils.api_base_url}/channels/${ch.id}/logo`">
+                                <span class="condition-edit-dialog__channel-option-name">{{ ch.name }}</span>
+                                <svg v-if="isChannelSelected(ch)" class="condition-edit-dialog__channel-option-check"
+                                    viewBox="0 0 24 24" width="16" height="16">
+                                    <path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                                </svg>
+                            </div>
                         </template>
                     </div>
                 </div>
@@ -196,7 +210,10 @@
                         <span class="condition-edit-dialog__preview-time">
                             {{ dayjs(program.start_time).format('M/D(ddd) HH:mm') }}
                         </span>
-                        {{ program.title }}
+                        <img class="condition-edit-dialog__preview-channel-logo" loading="lazy" decoding="async"
+                            :src="`${Utils.api_base_url}/channels/${program.channel_id}/logo`">
+                        <span class="condition-edit-dialog__preview-channel-name">{{ getChannelName(program) }}</span>
+                        <span class="condition-edit-dialog__preview-title">{{ program.title }}</span>
                     </div>
                     <div v-if="searchResult.total > 5" class="condition-edit-dialog__preview-more">
                         …他 {{ searchResult.total - 5 }} 件
@@ -219,12 +236,12 @@
 import { ref, computed, watch, nextTick } from 'vue';
 
 import Message from '@/message';
-import Channels, { type ChannelType, type ILiveChannelsList } from '@/services/Channels';
-import Programs, { type IProgramSearchCondition, type IProgramSearchConditionService,
+import Channels, { type ChannelType, type ILiveChannel, type ILiveChannelsList } from '@/services/Channels';
+import Programs, { type IProgram, type IProgramSearchCondition, type IProgramSearchConditionService,
     type IProgramSearchConditionDate, type IPrograms } from '@/services/Programs';
 import ReservationConditions, { type IReservationCondition } from '@/services/ReservationConditions';
 import { type IRecordSettings, IRecordSettingsDefault } from '@/services/Reservations';
-import { dayjs } from '@/utils';
+import Utils, { dayjs } from '@/utils';
 import { ProgramUtils } from '@/utils/ProgramUtils';
 
 
@@ -307,10 +324,12 @@ const CHANNEL_TYPE_LABELS: Record<ChannelType, string> = {
 const channelsList = ref<ILiveChannelsList>({ GR: [], BS: [], CS: [], CATV: [], SKY: [], BS4K: [] });
 const isChannelsLoading = ref(false);
 
+
 // チャンネルが存在するタイプの一覧
 const availableChannelTypes = computed((): ChannelType[] => {
+    // ラジオチャンネル以外の選択可能なチャンネルが1件以上あるタイプのみに絞る
     return (['GR', 'BS', 'CS', 'CATV', 'SKY', 'BS4K'] as ChannelType[])
-        .filter(t => channelsList.value[t].length > 0);
+        .filter(t => channelsList.value[t].some((c: ILiveChannel) => !c.is_radiochannel));
 });
 
 function channelTypeLabel(type: ChannelType): string {
@@ -325,6 +344,7 @@ function channelKey(ch: { network_id: number; service_id: number }): string {
 // 選択中のチャンネルを個別 ID (network_id_service_id) のセットで管理する (UI 専用状態)
 // タイプ単位の一括選択も個別選択も、全てここに集約して service_ranges に変換する
 const selectedChannelIds = ref<string[]>([]);
+
 
 // 指定チャンネルが選択中かどうか
 function isChannelSelected(ch: { network_id: number; service_id: number }): boolean {
@@ -439,6 +459,15 @@ async function previewSearch(): Promise<void> {
     } finally {
         isSearching.value = false;
     }
+}
+
+// 番組情報からチャンネル名を取得する (channelsList を network_id + service_id でマッチ)
+function getChannelName(program: IProgram): string {
+    for (const type of (['GR', 'BS', 'CS', 'CATV', 'SKY', 'BS4K'] as ChannelType[])) {
+        const ch = channelsList.value[type].find((c: ILiveChannel) => c.network_id === program.network_id && c.service_id === program.service_id);
+        if (ch) return ch.name;
+    }
+    return '';
 }
 
 // ============================================================
@@ -621,6 +650,11 @@ function cancel() {
 
 // ルールを保存する
 async function save() {
+    // キーワードとメモの両方が空の場合は保存を拒否する (ルール名なしでの登録防止)
+    if (!form.value.keyword.trim() && !form.value.note.trim()) {
+        Message.error('検索キーワードまたはメモを入力してください。');
+        return;
+    }
     isSaving.value = true;
     try {
         const searchCondition = buildSearchCondition();
@@ -685,16 +719,99 @@ async function save() {
         color: rgb(var(--v-theme-text-darken-1));
     }
 
-    &__chip-count {
-        font-size: 0.75rem;
-        opacity: 0.7;
-        margin-left: 4px;
+    &__type-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
     }
 
-    &__channel-list {
-        padding-top: 4px;
-        border-top: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-        margin-top: 4px;
+    &__type-btn {
+        flex: 1 1 auto;
+        min-width: 52px;
+        padding: 6px 12px;
+        border-radius: 6px;
+        border: 1px solid rgba(var(--v-theme-on-surface), 0.3);
+        background: transparent;
+        color: rgb(var(--v-theme-on-surface));
+        font-size: 0.85rem;
+        font-weight: 500;
+        cursor: pointer;
+        user-select: none;
+        transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+
+        &:hover {
+            background-color: rgba(var(--v-theme-on-surface), 0.06);
+        }
+
+        &--partial {
+            border-color: rgb(var(--v-theme-primary));
+            color: rgb(var(--v-theme-primary));
+            background-color: rgba(var(--v-theme-primary), 0.08);
+        }
+
+        &--full {
+            border-color: rgb(var(--v-theme-primary));
+            background-color: rgb(var(--v-theme-primary));
+            color: #fff;
+        }
+    }
+
+    &__channel-listbox {
+        max-height: 240px;
+        overflow-y: auto;
+        border: 1px solid rgba(var(--v-theme-on-surface), 0.23);
+        border-radius: 6px;
+    }
+
+    &__channel-type-header {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: rgb(var(--v-theme-text-darken-1));
+        padding: 4px 10px;
+        background: rgba(var(--v-theme-on-surface), 0.05);
+        border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.08);
+    }
+
+    &__channel-option {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 10px;
+        min-height: 52px;
+        cursor: pointer;
+        user-select: none;
+        border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.06);
+        transition: background-color 0.12s;
+
+        &:last-child {
+            border-bottom: none;
+        }
+
+        &:hover {
+            background-color: rgba(var(--v-theme-on-surface), 0.04);
+        }
+
+        &--selected {
+            background-color: rgba(var(--v-theme-primary), 0.12);
+        }
+    }
+
+    &__channel-icon {
+        width: 72px;
+        height: 40px;
+        object-fit: contain;
+        flex-shrink: 0;
+    }
+
+    &__channel-option-name {
+        flex: 1;
+        font-size: 1rem;
+        line-height: 1.4;
+    }
+
+    &__channel-option-check {
+        color: rgb(var(--v-theme-primary));
+        flex-shrink: 0;
     }
 
     &__priority-label {
@@ -724,11 +841,36 @@ async function save() {
     }
 
     &__preview-item {
+        display: flex;
+        align-items: center;
+        gap: 5px;
         font-size: 0.85rem;
         padding: 3px 0;
+        overflow: hidden;
+    }
+
+    &__preview-channel-logo {
+        width: 24px;
+        height: 14px;
+        object-fit: contain;
+        flex-shrink: 0;
+    }
+
+    &__preview-channel-name {
+        font-size: 0.78rem;
+        color: rgb(var(--v-theme-text-darken-1));
+        white-space: nowrap;
+        flex-shrink: 0;
+        max-width: 80px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    &__preview-title {
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        min-width: 0;
     }
 
     &__preview-time {
