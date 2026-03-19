@@ -48,7 +48,7 @@
             <div v-ripple="isRecordButtonClickable"
                 class="program-info__record-button"
                 :class="{
-                    'program-info__record-button--disabled': !isEDCBBackend,
+                    'program-info__record-button--disabled': !isRecordingSupported,
                     'program-info__record-button--preparing': isPreparing,
                 }"
                 @click="handleRecordButtonClick">
@@ -63,16 +63,16 @@
                         style="color: #EF5350; margin-bottom: -1px" />
                     <span style="margin-left: 5px;">録画開始中...</span>
                 </template>
-                <!-- 未予約 (EDCB バックエンド): クリックで録画開始 -->
-                <template v-else-if="isEDCBBackend">
+                <!-- 未予約 (EDCB / Mirakurun バックエンド): クリックで録画開始 -->
+                <template v-else-if="isRecordingSupported">
                     <Icon icon="fluent:record-16-regular" width="17px" height="17px"
                         style="color: #EF5350; margin-bottom: -1px" />
                     <span style="margin-left: 5px;">録画開始</span>
                 </template>
-                <!-- Mirakurun バックエンド: グレーアウト表示 -->
+                <!-- 録画非対応バックエンド: グレーアウト表示 -->
                 <template v-else>
                     <Icon icon="fluent:record-16-regular" width="17px" height="17px" style="margin-bottom: -1px" />
-                    <span style="margin-left: 5px;">録画開始 (EDCB 専用)</span>
+                    <span style="margin-left: 5px;">録画開始 (非対応)</span>
                 </template>
             </div>
         </section>
@@ -128,7 +128,7 @@ import { mapStores } from 'pinia';
 import { defineComponent } from 'vue';
 
 import Message from '@/message';
-import Reservations, { IReservation } from '@/services/Reservations';
+import Reservations, { IRecordSettingsDefault, IReservation } from '@/services/Reservations';
 import useChannelsStore from '@/stores/ChannelsStore';
 import useServerSettingsStore from '@/stores/ServerSettingsStore';
 import Utils, { ChannelUtils, ProgramUtils } from '@/utils';
@@ -173,6 +173,20 @@ export default defineComponent({
             return this.serverSettingsStore.server_settings.general.backend === 'EDCB';
         },
 
+        // Mirakurun バックエンドかどうか
+        // サーバー設定がまだ取得されていない場合は false を返す
+        isMirakurunBackend(): boolean {
+            if (this.serverSettingsStore.is_loaded !== true) {
+                return false;
+            }
+            return this.serverSettingsStore.server_settings.general.backend === 'Mirakurun';
+        },
+
+        // 録画予約機能が使用可能かどうか (EDCB・Mirakurun 両方に対応)
+        isRecordingSupported(): boolean {
+            return this.isEDCBBackend || this.isMirakurunBackend;
+        },
+
         // 現在の番組が録画中かどうか
         isRecording(): boolean {
             return this.reservation?.is_recording_in_progress === true;
@@ -189,9 +203,9 @@ export default defineComponent({
         },
 
         // 録画ボタンがクリック可能かどうか（v-ripple エフェクトの表示判定に使用）
-        // 録画中（停止ダイアログを開く）または未予約 (EDCB バックエンド) の場合のみクリック可能
+        // 録画中（停止ダイアログを開く）または未予約 (EDCB / Mirakurun バックエンド) の場合のみクリック可能
         isRecordButtonClickable(): boolean {
-            return this.isRecording || (this.isEDCBBackend && !this.hasReservation && !this.is_starting_recording);
+            return this.isRecording || (this.isRecordingSupported && !this.hasReservation && !this.is_starting_recording);
         },
 
         // 録画予約状態チェック用の現在番組 ID
@@ -230,7 +244,7 @@ export default defineComponent({
             // channelsStore.channel.current.program_present は PSI/SI 取得済みならリアルタイムの event_id を含み、
             // 未取得なら channels API のデータ (DB スナップショット) が使用される
             const programPresent = this.channelsStore.channel.current.program_present;
-            if (this.isEDCBBackend !== true || programPresent === null) {
+            if (this.isRecordingSupported !== true || programPresent === null) {
                 this.reservation = null;
                 return false;
             }
@@ -249,8 +263,8 @@ export default defineComponent({
                     return false;
                 }
 
-                // 通信待ちの間に EDCB 以外へ切り替わった場合も結果を破棄する
-                if (this.isEDCBBackend !== true) {
+                // 通信待ちの間に録画非対応バックエンドへ切り替わった場合も結果を破棄する
+                if (this.isRecordingSupported !== true) {
                     this.reservation = null;
                     return false;
                 }
@@ -283,9 +297,8 @@ export default defineComponent({
             if (this.isPreparing === true) {
                 return;
             }
-            // Mirakurun バックエンドの場合は警告を表示
-            if (this.isEDCBBackend !== true) {
-                Message.warning('録画予約機能は EDCB バックエンド選択時のみ利用できます。');
+            // 録画非対応バックエンドの場合は何もしない（グレーアウトされているため通常は到達しない）
+            if (this.isRecordingSupported !== true) {
                 return;
             }
             // 未予約の場合は録画を開始
@@ -308,7 +321,11 @@ export default defineComponent({
             }
             this.is_starting_recording = true;
             try {
-                const defaultSettings = await Reservations.fetchDefaultRecordSettings();
+                // Mirakurun バックエンドでは録画設定プリセット API (/recording/presets) が EDCB 専用のため呼び出せない
+                // Mirakurun の場合はハードコードされたデフォルト値を直接使用し、不要なエラートーストを防ぐ
+                const defaultSettings = this.isEDCBBackend
+                    ? await Reservations.fetchDefaultRecordSettings()
+                    : structuredClone(IRecordSettingsDefault);
                 const result = await Reservations.addReservation(programPresent.id, defaultSettings);
                 // 予約状態を再チェックして UI を更新
                 // 予約追加に失敗した場合も、外部で既に予約済みの可能性があるため状態を再取得する
@@ -384,8 +401,8 @@ export default defineComponent({
          * 60秒間隔で録画予約状態をチェックし、外部から追加された予約や録画状態の変化を反映する
          */
         startBackgroundPolling(): void {
-            // Mirakurun バックエンドの場合は録画予約 API が使えないためポーリング不要
-            if (this.isEDCBBackend !== true) {
+            // 録画非対応バックエンドの場合は録画予約 API が使えないためポーリング不要
+            if (this.isRecordingSupported !== true) {
                 return;
             }
             this.stopBackgroundPolling();
