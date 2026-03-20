@@ -75,6 +75,7 @@
                                 :is36HourDisplay="props.is36HourDisplay"
                                 :isNextReserved="isNextProgramReserved(channelData, program, false)"
                                 :resizeTrigger="windowResizeCounter"
+                                :searchQuery="props.searchQuery"
                                 @click="onProgramClick(program)"
                                 @show-detail="$emit('show-program-detail', program.id, channelData.channel, program)"
                                 @quick-reserve="$emit('quick-reserve', program.id, channelData.channel, program)"
@@ -102,6 +103,7 @@
                                         :is36HourDisplay="props.is36HourDisplay"
                                         :isNextReserved="isNextProgramReserved(channelData, program, true)"
                                         :resizeTrigger="windowResizeCounter"
+                                        :searchQuery="props.searchQuery"
                                         @click="onProgramClick(program)"
                                         @show-detail="$emit('show-program-detail', program.id, subchannel.channel, program)"
                                         @quick-reserve="$emit('quick-reserve', program.id, subchannel.channel, program)"
@@ -161,6 +163,8 @@ const props = defineProps<{
     is36HourDisplay: boolean;
     canGoPreviousDay: boolean;
     canGoNextDay: boolean;
+    // 番組表内の絞り込み検索クエリ (空文字列の場合は絞り込みなし)
+    searchQuery: string;
 }>();
 
 // Emits

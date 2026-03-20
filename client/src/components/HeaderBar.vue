@@ -26,12 +26,14 @@ import { onMounted, ref, computed, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 
 import useSettingsStore from '@/stores/SettingsStore';
+import useTimeTableStore from '@/stores/TimeTableStore';
 
 const isButtonDisplay = ref(false);
 const searchQuery = ref('');
 const router = useRouter();
 const route = useRoute();
 const settingsStore = useSettingsStore();
+const timetableStore = useTimeTableStore();
 
 // テーマモードに応じてロゴ画像を切り替える
 const logoSrc = computed(() => {
@@ -57,7 +59,18 @@ onMounted(() => {
 // ルートの変更を監視して検索クエリを更新
 watch(() => route.fullPath, initializeSearchQuery);
 
+// 番組表ページかどうか（ヘッダーにコントロールが多くスペースに余裕がないため、PWA インストールボタンを非表示にする）
+const isTimeTablePage = computed(() => route.path.startsWith('/timetable'));
+
+const showSearchInput = computed(() => {
+    const path = route.path;
+    return !path.startsWith('/settings') && !path.startsWith('/login') && !path.startsWith('/register');
+});
+
 const searchPlaceholder = computed(() => {
+    if (route.path.startsWith('/timetable')) {
+        return '番組表内を絞り込み...';
+    }
     if (route.path.startsWith('/captures')) {
         return 'キャプチャを番組名やチャンネル名で検索...';
     }
@@ -82,19 +95,28 @@ const handleKeyDown = (event: KeyboardEvent) => {
 };
 
 const doSearch = () => {
+    // 番組表ページでは in-place 絞り込みのため外部遷移しない
+    if (isTimeTablePage.value) {
+        return;
+    }
     if (searchQuery.value.trim()) {
         const searchPath = getSearchPath();
         router.push(`${searchPath}?query=${encodeURIComponent(searchQuery.value.trim())}`);
     }
 };
 
-const showSearchInput = computed(() => {
-    const path = route.path;
-    return !path.startsWith('/settings') && !path.startsWith('/login') && !path.startsWith('/register');
+// 番組表ページでは検索クエリを TimeTableStore に同期する
+// 番組表を離れたら入力欄をクリアする
+watch(searchQuery, (value: string) => {
+    if (isTimeTablePage.value) {
+        timetableStore.search_query = value;
+    }
 });
-
-// 番組表ページかどうか（ヘッダーにコントロールが多くスペースに余裕がないため、PWA インストールボタンを非表示にする）
-const isTimeTablePage = computed(() => route.path.startsWith('/timetable'));
+watch(isTimeTablePage, (isTimetable: boolean) => {
+    if (!isTimetable) {
+        searchQuery.value = '';
+    }
+});
 
 </script>
 <style lang="scss" scoped>

@@ -33,7 +33,7 @@
                     <!-- 時間セレクター -->
                     <v-select class="timetable-controls__time" variant="outlined" density="compact" hide-details
                         :items="timeItems" v-model="selectedTimeDisplay"
-                        @update:model-value="onTimeChange">
+                        @update:model-value="onTimeChange">t
                     </v-select>
                     <!-- 現在時刻に戻るボタン -->
                     <v-btn variant="flat" class="timetable-controls__now-button" icon
@@ -95,6 +95,7 @@
                     :is36HourDisplay="timetableStore.is_36hour_display"
                     :canGoPreviousDay="canGoPreviousDay"
                     :canGoNextDay="canGoNextDay"
+                    :searchQuery="timetableStore.search_query"
                     @time-slot-change="onTimeSlotChange"
                     @date-display-offset-change="onDateDisplayOffsetChange"
                     @show-program-detail="onShowProgramDetail"

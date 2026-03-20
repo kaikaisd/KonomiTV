@@ -76,6 +76,10 @@ const useTimeTableStore = defineStore('timetable', () => {
     // 「現在時刻 - 1時間の00分」を表す
     const scroll_top_limit_time = ref<Dayjs | null>(null);
 
+    // 番組表内の絞り込み検索クエリ (HeaderBar の検索入力から反映される)
+    // 空文字列の場合は絞り込みなし
+    const search_query = ref<string>('');
+
 
     /**
      * 36時間表示が必要かどうかを判定する
@@ -636,6 +640,8 @@ const useTimeTableStore = defineStore('timetable', () => {
         // selected_channel_type は次回アクセス時に initialLoad() で再設定されるため、
         // あえて null にリセットして、次回は最新の available_channel_types に基づいて決定されるようにする
         selected_channel_type.value = null;
+        // 番組表を離れたときに検索クエリをクリアする
+        search_query.value = '';
     }
 
 
@@ -690,6 +696,7 @@ const useTimeTableStore = defineStore('timetable', () => {
         is_36hour_display,
         date_display_offset,
         scroll_top_limit_time,
+        search_query,
 
         // Getters
         available_channel_types,

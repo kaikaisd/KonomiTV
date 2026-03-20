@@ -13,6 +13,8 @@
             'timetable-program-cell--disabled': isReservationDisabled,
             'timetable-program-cell--shopping': isShoppingProgram,
             'timetable-program-cell--next-reserved': hasReservation && isNextReserved,
+            'timetable-program-cell--search-match': !!props.searchQuery && isSearchMatch,
+            'timetable-program-cell--search-dimmed': !!props.searchQuery && !isSearchMatch,
         }"
         :style="cellStyle"
         @click="onClick"
@@ -117,6 +119,25 @@ function getDecoratedProgramInfo(program: ITimeTableProgram, key: 'title' | 'des
     return key === 'title' ? resolved.title : resolved.description;
 }
 
+/**
+ * 検索クエリに一致するテキストを <mark> タグで囲んでハイライトする
+ * HTML タグ内のテキストには適用せず、テキストノード部分のみを対象とする
+ * @param html 装飾済み HTML 文字列
+ * @param query 検索クエリ
+ * @returns ハイライト済み HTML 文字列
+ */
+function highlightSearchText(html: string, query: string): string {
+    if (!query) return html;
+    const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(${escaped})`, 'gi');
+    // HTML タグ (<...>) とテキストノードを交互にマッチし、テキスト部分のみ置換する
+    return html.replace(/(<[^>]+>)|([^<]+)/g, (match, tag: string | undefined, text: string | undefined) => {
+        if (tag !== undefined) return tag;  // HTML タグはそのまま返す
+        if (text !== undefined) return text.replace(regex, '<mark class="timetable-search-highlight">$1</mark>');
+        return match;
+    });
+}
+
 // Props
 const props = defineProps<{
     program: ITimeTableProgram;
@@ -135,6 +156,8 @@ const props = defineProps<{
     isNextReserved?: boolean;  // 次の番組も予約されているか (border 重複回避用)
     // ウィンドウリサイズ時に再計算をトリガーするためのカウンター (親から受け取る)
     resizeTrigger: number;
+    // 番組表内絞り込み検索クエリ (空文字列または未指定の場合は絞り込みなし)
+    searchQuery?: string;
 }>();
 
 // Emits
@@ -204,6 +227,19 @@ const isPartialRecording = computed(() => {
  */
 const isUnavailableRecording = computed(() => {
     return props.program.reservation?.recording_availability === 'Unavailable';
+});
+
+/**
+ * 検索クエリがある場合に、この番組がクエリにマッチするかどうか
+ * タイトルまたは説明に部分一致 (大文字小文字を区別しない) した場合に true を返す
+ */
+const isSearchMatch = computed(() => {
+    const query = props.searchQuery;
+    if (!query) return false;
+    const lower = query.toLowerCase();
+    const title = props.program.title?.toLowerCase() ?? '';
+    const description = props.program.description?.toLowerCase() ?? '';
+    return title.includes(lower) || description.includes(lower);
 });
 
 /**
@@ -410,17 +446,19 @@ const cellStyle = computed(() => {
 // コンテンツの sticky オフセットは CSS の clamp() で処理する
 
 /**
- * 装飾されたタイトル (囲み文字ハイライト)
+ * 装飾されたタイトル (囲み文字ハイライト + 検索ワードハイライト)
  */
 const decoratedTitle = computed(() => {
-    return getDecoratedProgramInfo(props.program, 'title');
+    const base = getDecoratedProgramInfo(props.program, 'title');
+    return highlightSearchText(base, props.searchQuery ?? '');
 });
 
 /**
- * 装飾された説明 (囲み文字ハイライト)
+ * 装飾された説明 (囲み文字ハイライト + 検索ワードハイライト)
  */
 const decoratedDescription = computed(() => {
-    return getDecoratedProgramInfo(props.program, 'description');
+    const base = getDecoratedProgramInfo(props.program, 'description');
+    return highlightSearchText(base, props.searchQuery ?? '');
 });
 
 /**
@@ -588,6 +626,23 @@ watch(isExpanded, async (value) => {
     // 次の番組も予約されている場合は border-bottom を非表示にして重複を避ける
     &--next-reserved {
         border-bottom: none;
+    }
+
+    // 検索ヒット: 通常表示のまま (テキスト内の <mark> でハイライト)
+    &--search-match {
+        // テキスト内のハイライトマークのスタイル
+        :deep(mark.timetable-search-highlight) {
+            background-color: rgba(255, 235, 59, 0.75);
+            color: #000;
+            border-radius: 2px;
+            padding: 0 1px;
+            font-style: normal;
+        }
+    }
+
+    // 検索非ヒット: 半透明にして目立たなくする
+    &--search-dimmed {
+        opacity: 0.25;
     }
 
     // ジャンルハイライト縦線 (REGZA 風)
