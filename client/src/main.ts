@@ -76,8 +76,19 @@ app.mount('#app');
 
 const { updateServiceWorker } = useRegisterSW({
     // Service Worker の登録に成功したとき
-    onRegisteredSW(registration) {
+    // 長時間ページを開いたままでも新バージョンを検知できるよう、定期的に更新チェックを行う。
+    // CF Access 環境ではセッション切れ後に SW がキャッシュを提供し続けて更新が止まることがあるため、
+    // 60分ごとに明示的に SW の更新確認を行い、新しい SW がある場合は onNeedRefresh を発火させる。
+    onRegisteredSW(swUrl, registration) {
         console.log('Service worker has been registered.');
+        if (registration) {
+            setInterval(() => {
+                console.log('Checking for service worker update...');
+                registration.update().catch((error) => {
+                    console.error('Service worker update check failed:', error);
+                });
+            }, 60 * 60 * 1000);  // 60分おき
+        }
     },
     // Service Worker の登録に失敗したとき
     onRegisterError(error) {

@@ -31,6 +31,21 @@
                         <Icon icon="fluent:history-20-regular" width="26px" />
                         <span class="ml-4">視聴履歴</span>
                     </v-btn>
+                    <!-- Cloudflare Access セッション切れ再認証ボタン: CF セッションが期限切れの場合のみ表示する -->
+                    <v-btn v-if="cfSessionExpired" variant="flat"
+                        class="settings-navigation__button settings-navigation__button--cf-expired mt-3"
+                        @click.prevent="reAuthenticate">
+                        <Icon icon="fluent:key-16-regular" width="22px" />
+                        <span class="ml-4">CF Access 再認証</span>
+                    </v-btn>
+                    <!-- Cloudflare Access のログアウトボタン: CF Access 経由でログインしている場合のみ表示する -->
+                    <!-- /cdn-cgi/access/logout にリダイレクトすることでセッションを終了する -->
+                    <v-btn v-if="isCloudflareAccess" variant="flat"
+                        class="settings-navigation__button settings-navigation__button--cf-logout mt-3"
+                        href="/cdn-cgi/access/logout">
+                        <Icon icon="fa:sign-out" width="22px" />
+                        <span class="ml-4">CF Accessからログアウト</span>
+                    </v-btn>
                     <v-btn variant="flat" class="settings-navigation__button settings-navigation__button--version mt-3"
                         :class="{'settings-navigation__button--version-highlight': versionStore.is_update_available}"
                         href="https://github.com/kaikaisd/KonomiTV" target="_blank">
@@ -46,7 +61,7 @@
 </template>
 <script lang="ts" setup>
 
-import { onMounted } from 'vue';
+import { onMounted, ref } from 'vue';
 
 import HeaderBar from '@/components/HeaderBar.vue';
 import Navigation from '@/components/Navigation.vue';
@@ -57,9 +72,49 @@ import useVersionStore from '@/stores/VersionStore';
 const userStore = useUserStore();
 const versionStore = useVersionStore();
 
+// Cloudflare Access 経由で認証済みかどうか
+// /cdn-cgi/access/get-identity が 200 を返せば認証済みと判断する
+const isCloudflareAccess = ref(false);
+// CF Access が存在するが未認証 (セッション切れ) の状態かどうか
+// /cdn-cgi/access/get-identity が 200 以外の HTTP レスポンスを返した場合に true になる
+const cfSessionExpired = ref(false);
+
+// CF Access 再認証: SW を解除してからリロードし CF Access の認証フローを確実に通す
+// Service Worker がインストール済みの場合、window.location.reload() だけでは SW が
+// キャッシュ済みの index.html を返してしまい、CF Access の 302 リダイレクトが発生しない。
+async function reAuthenticate(): Promise<void> {
+    if ('serviceWorker' in navigator) {
+        const registration = await navigator.serviceWorker.getRegistration();
+        if (registration) {
+            await registration.unregister();
+        }
+    }
+    window.location.reload();
+}
+
 onMounted(async () => {
     await userStore.fetchUser();
     await versionStore.fetchServerVersion();
+    // /cdn-cgi/access/get-identity の HTTP ステータスで CF Access の状態を判別する:
+    //   200     → CF Access 認証済み: ログアウトボタンを表示する
+    //   非200   → CF Access が存在するが未認証: 再認証ボタンを表示する
+    //   例外発生 → CF Access なし (LAN 直接アクセス等): どちらも表示しない
+    try {
+        const response = await fetch('/cdn-cgi/access/get-identity');
+        if (response.ok) {
+            // 200: 認証済み
+            isCloudflareAccess.value = true;
+            cfSessionExpired.value = false;
+        } else {
+            // 400 / 403 等: CF Access は存在するが未認証
+            isCloudflareAccess.value = false;
+            cfSessionExpired.value = true;
+        }
+    } catch {
+        // ネットワークエラーまたは CF Access が導入されていない環境
+        isCloudflareAccess.value = false;
+        cfSessionExpired.value = false;
+    }
 });
 
 </script>

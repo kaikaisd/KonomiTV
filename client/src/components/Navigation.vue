@@ -154,8 +154,18 @@ export default defineComponent({
         ...mapStores(useVersionStore),
     },
     methods: {
-        // CF Access 再認証: ページをリロードして CF Access の認証フローを開始する
-        reAuthenticate(): void {
+        // CF Access 再認証: SW を解除してからリロードし CF Access の認証フローを確実に通す
+        // Service Worker がインストール済みの場合、window.location.reload() だけでは SW が
+        // キャッシュ済みの index.html を返してしまい、CF Access の 302 リダイレクトが発生しない。
+        // そのため SW を一旦登録解除してキャッシュをバイパスし、ブラウザが直接ネットワークに
+        // アクセスするようにしてから再ロードする。再ロード後に SW は再インストールされる。
+        async reAuthenticate(): Promise<void> {
+            if ('serviceWorker' in navigator) {
+                const registration = await navigator.serviceWorker.getRegistration();
+                if (registration) {
+                    await registration.unregister();
+                }
+            }
             window.location.reload();
         },
     },

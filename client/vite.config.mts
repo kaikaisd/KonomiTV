@@ -120,9 +120,15 @@ export default defineConfig({
             },
             // Workbox の設定
             workbox: {
+                // 新しい SW がアクティブ化した瞬間に全クライアントを制御下に置く。
+                // これにより updateServiceWorker(true) → skipWaiting → reload の流れで
+                // 確実に新しい SW がページを制御し、古いキャッシュが引き続き使われる状況を防ぐ。
+                clientsClaim: true,
                 // 古いキャッシュを自動削除する
                 cleanupOutdatedCaches: true,
                 // /api/, /cdn-cgi/(cloudflare) 以下のリクエストでは index.html を返さない
+                // CF Access の認証エンドポイント (/cdn-cgi/access/*) は SW のキャッシュを
+                // バイパスさせ、常にネットワーク (Cloudflare エッジ) へ到達させる必要がある。
                 navigateFallbackDenylist: [/^\/api/, /^\/cdn-cgi/],
                 // キャッシュするファイルの最大サイズ
                 maximumFileSizeToCacheInBytes: 1024 * 1024 * 15,  // 15MB
