@@ -493,6 +493,7 @@ class RecordedScanTask:
         existing_db_recorded_videos: dict[anyio.Path, RecordedVideoSummary] | None = None,
         force_update: bool = False,
         wait_background_analysis: bool = False,
+        recording_complete: bool = False,
     ) -> None:
         """
         指定された録画ファイルのメタデータを解析し、DB に永続化する
@@ -505,6 +506,8 @@ class RecordedScanTask:
                 (ファイル変更イベントから呼ばれた場合、watchfiles 初期化時に取得した全レコードと今で状態が一致しているとは限らないため、None が入る)
             force_update (bool): 既に DB に登録されている録画ファイルのメタデータを強制的に再解析するかどうか (デフォルト: False)
             wait_background_analysis (bool): バックグラウンド解析が完了するまで待つかどうか (デフォルト: False)
+            recording_complete (bool): __checkRecordingCompletion() から録画完了後の処理として呼ばれた場合に True を設定する (デフォルト: False)
+                True の場合、__handleFileChange() との競合により _recording_files に再追加されていても is_recording フラグをリセットして解析を続行する
         """
 
         # ファイルパスに対応するロックを取得または作成
@@ -603,6 +606,19 @@ class RecordedScanTask:
 
                 # 現在録画中とマークされているファイルの処理
                 is_recording = file_path in self._recording_files
+                # __checkRecordingCompletion() から録画完了後の処理として呼ばれた場合、
+                # __handleFileChange() との競合により _recording_files にファイルが再追加されていることがある。
+                # 具体的には:
+                #   1. __checkRecordingCompletion() が _recording_files.pop() でファイルを除去する
+                #   2. await self.isFileExists() のタイミングで watchfiles イベントが発火する
+                #      (VideoEncodingTask によるファイル読み取りなどが Windows 上でのファイルシステムイベントを誘発する場合がある)
+                #   3. __handleFileChange() が mtime の新しさからファイルを _recording_files に再追加する
+                #   4. この processRecordedFile() が is_recording=True かつ status='Recording' を検知し早期リターンしてしまう
+                # この競合が発生すると録画完了後もステータスが 'Recording' のまま固着し、アプリ再起動まで解析が進まない。
+                # recording_complete=True の場合は is_recording を強制的にリセットして解析を続行する。
+                if recording_complete and is_recording:
+                    is_recording = False
+                    self._recording_files.pop(file_path, None)
                 if is_recording:
                     # 既に DB に登録済みで録画中の場合は再解析しない
                     if (existing_recorded_video_summary is not None and
@@ -1680,7 +1696,9 @@ class RecordedScanTask:
                         if await self.isFileExists(file_path):
                             # この時点で、録画（またはファイルコピー）が確実に完了しているはず
                             logging.info(f'{file_path}: Recording or copying has just completed or has already completed.')
-                            await self.processRecordedFile(file_path)
+                            # recording_complete=True を渡すことで、__handleFileChange() との競合による
+                            # _recording_files への再追加があっても is_recording フラグをリセットして確実に解析を実行する
+                            await self.processRecordedFile(file_path, recording_complete=True)
                     except Exception as ex:
                         logging.error(f'{file_path}: Error processing completed file:', exc_info=ex)
 
