@@ -37,4 +37,5 @@
 	"typescript.updateImportsOnFileMove.enabled": "always",
     // TypeScript の SDK をプロジェクトの node_modules から読み込む
     "typescript.tsdk": "client/node_modules/typescript/lib",
+    "robotcode.disableExtension": true,
 }

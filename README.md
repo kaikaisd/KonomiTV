@@ -53,7 +53,7 @@ EDCB を使わず、Mirakurun バックエンドのみで録画予約が行え�
 
 ボタンをクリックして、`/cdn-cgi/access/logout` をリクエストする。
 
-### 4. Docker によるコードチェック環境
+### 5. Docker によるコードチェック環境
 
 開発環境の差異（OS・Python バージョン・Node.js バージョン）に関わらず、一貫したコードチェックを実行できる Docker ベースの環境を整備しました。
 
@@ -70,7 +70,7 @@ docker compose -f docker-compose.check.yaml run --rm check
 - どちらかが失敗した場合は非ゼロの終了コードで終了し、CI 等でも利用可能
 - ソースコードはホストからマウントされるため、変更後に毎回リビルドする必要はない
 
-### 5. Telegram 録画完了通知
+### 6. Telegram 録画完了通知
 
 録画が完了したときに Telegram Bot 経由でサムネイル・番組情報・再生リンクを通知する機能を追加しました。
 
