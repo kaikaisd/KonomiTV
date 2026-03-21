@@ -115,6 +115,14 @@
                             </template>
                             <v-list-item-title class="ml-3">サムネイルを再生成</v-list-item-title>
                         </v-list-item>
+                        <v-list-item @click="addToEncodingQueue"
+                            :disabled="program.recorded_video.status !== 'Recorded'"
+                            v-ftooltip="'録画ファイルをエンコードキューに追加し、MP4 にトランスコードします'">
+                            <template v-slot:prepend>
+                                <Icon icon="fluent:video-clip-24-regular" width="20px" height="20px" />
+                            </template>
+                            <v-list-item-title class="ml-3">エンコードキューに追加</v-list-item-title>
+                        </v-list-item>
                         <v-list-item v-if="forSeries" @click="show_remove_from_series = true">
                             <template v-slot:prepend>
                                 <Icon icon="fluent:subtract-circle-24-regular" width="20px" height="20px" />
@@ -190,6 +198,7 @@ import { ref, computed } from 'vue';
 
 import RecordedFileInfoDialog from '@/components/Videos/Dialogs/RecordedFileInfoDialog.vue';
 import Message from '@/message';
+import EncodingTasks from '@/services/EncodingTasks';
 import SeriesService from '@/services/Series';
 import Videos, { IRecordedProgram } from '@/services/Videos';
 import useSettingsStore from '@/stores/SettingsStore';
@@ -243,6 +252,16 @@ const regenerateThumbnail = async () => {
     const result = await Videos.regenerateThumbnail(props.program.id);
     if (result === true) {
         Message.success('サムネイルの再生成が完了しました。');
+    }
+};
+
+// エンコードキューに追加
+const addToEncodingQueue = async () => {
+    const result = await EncodingTasks.add({
+        recorded_video_id: props.program.recorded_video.id,
+    });
+    if (result !== null) {
+        Message.success('エンコードキューに追加しました。');
     }
 };
 
