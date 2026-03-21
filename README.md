@@ -70,7 +70,19 @@ docker compose -f docker-compose.check.yaml run --rm check
 - どちらかが失敗した場合は非ゼロの終了コードで終了し、CI 等でも利用可能
 - ソースコードはホストからマウントされるため、変更後に毎回リビルドする必要はない
 
-### 6. Telegram 録画完了通知
+### 6. バッチエンコードキュー
+
+Amatsukaze に着想を得た、録画 TS ファイルの MP4 へのバッチトランスコード機能を追加しました。ナビゲーションの「エンコード」からアクセスできます。
+
+- **キュー管理**: 録画番組をエンコードキューに追加し、優先度順に自動処理
+- **リアルタイム進捗表示**: SSE (Server-Sent Events) による進捗率のリアルタイム更新
+- **複数エンコーダー対応**: FFmpeg / QSVEncC / NVEncC / VCEEncC / rkmppenc から選択可能
+- **コーデック選択**: H.264 / H.265 から選択可能
+- **タスク操作**: キャンセル・リトライ・削除・優先度変更をサポート
+- **ステータス管理**: Pending (待機中) → Encoding (エンコード中) → Completed (完了) / Failed (失敗) / Cancelled (キャンセル)
+- **サマリーダッシュボード**: ステータスごとの件数をカード形式で表示
+
+### 7. Telegram 録画完了通知
 
 録画が完了したときに Telegram Bot 経由でサムネイル・番組情報・再生リンクを通知する機能を追加しました。
 
@@ -131,6 +143,18 @@ Telegram の **HTML モード**で送信されるメッセージ本文を自由�
 |---------|------|------|
 | GET | `/api/videos/storage` | 録画フォルダのディスク使用量取得（ディスク単位で重複排除） |
 
+### エンコードキュー関連
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/api/encoding-tasks` | エンコードタスク一覧取得（ステータスフィルタ・ページネーション対応） |
+| POST | `/api/encoding-tasks` | エンコードタスク追加 |
+| GET | `/api/encoding-tasks/events` | SSE によるリアルタイム状態配信 |
+| GET | `/api/encoding-tasks/{task_id}` | エンコードタスク取得 |
+| PUT | `/api/encoding-tasks/{task_id}` | エンコードタスク更新（優先度変更・キャンセル） |
+| DELETE | `/api/encoding-tasks/{task_id}` | エンコードタスク削除 |
+| POST | `/api/encoding-tasks/{task_id}/retry` | エンコードタスクリトライ |
+
 ### Telegram 通知関連
 
 | メソッド | パス | 説明 |
@@ -157,6 +181,10 @@ Telegram の **HTML モード**で送信されるメッセージ本文を自由�
 | `server/app/models/MirakurunReservation.py` | **[新規]** Mirakurun 録画予約モデル |
 | `server/app/models/MirakurunRecordingRule.py` | **[新規]** キーワード自動予約ルールモデル |
 | `server/app/recording/` | **[新規]** Mirakurun 録画エンジン（予約管理・録画開始/停止） |
+| `server/app/models/EncodingTask.py` | **[新規]** バッチエンコードタスク DB モデル |
+| `server/app/encoding/EncodingQueueManager.py` | **[新規]** エンコードキューマネージャー（バックグラウンドタスク） |
+| `server/app/routers/EncodingTasksRouter.py` | **[新規]** エンコードタスク CRUD + SSE API |
+| `server/app/migrations/models/12_*.py` | **[新規]** エンコードタスク DB マイグレーション |
 | `server/app/routers/ReservationsRouter.py` | Mirakurun 録画予約 CRUD API の追加 |
 | `server/app/routers/ReservationConditionsRouter.py` | **[新規]** 自動予約ルール CRUD API |
 | `server/app/routers/ProgramsRouter.py` | 番組検索 API に Mirakurun バックエンド対応を追加 |
@@ -175,7 +203,9 @@ Telegram の **HTML モード**で送信されるメッセージ本文を自由�
 | `client/src/services/Settings.ts` | `validateTelegramTemplate()` メソッド追加・通知設定フィールドの追加 |
 | `client/src/services/Reservations.ts` | 録画予約 API クライアント |
 | `client/src/services/ReservationConditions.ts` | 自動予約ルール API クライアント |
-| `client/src/components/Navigation.vue` | 予約メニュー項目の追加 |
+| `client/src/services/EncodingTasks.ts` | **[新規]** エンコードタスク API クライアント |
+| `client/src/views/Encoding/Home.vue` | **[新規]** エンコードキュー表示ページ（SSE リアルタイム更新） |
+| `client/src/components/Navigation.vue` | 予約メニュー項目・エンコードメニュー項目の追加 |
 | `client/src/stores/VersionStore.ts` | バージョン情報ストアの更新 |
 
 </details>

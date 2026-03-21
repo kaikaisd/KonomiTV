@@ -788,3 +788,75 @@ class VersionInformation(BaseModel):
     environment: Literal['Windows', 'Linux', 'Linux-Docker', 'Linux-ARM']
     backend: Literal['EDCB', 'Mirakurun']
     encoder: Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC', 'rkmppenc']
+
+# ***** エンコードキュー *****
+
+# エンコーダーの種別の型定義
+EncoderType = Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC', 'rkmppenc']
+
+# エンコードタスクのステータスの型定義
+EncodingTaskStatusType = Literal['Pending', 'Encoding', 'Completed', 'Failed', 'Cancelled']
+
+class EncodingTaskResponse(BaseModel):
+    """エンコードタスクの状態を表すレスポンススキーマ"""
+    # タスク ID
+    id: int
+    # エンコード元の録画 TS ファイルパス
+    source_file_path: str
+    # エンコード後の出力ファイルパス
+    output_file_path: str
+    # 関連する RecordedVideo の ID (null 許容)
+    recorded_video_id: int | None
+    # 使用するエンコーダーの種別
+    encoder_type: EncoderType
+    # 出力映像コーデック
+    video_codec: Literal['H.264', 'H.265']
+    # エンコーダー固有のプリセット名
+    quality_preset: str
+    # 映像ビットレート
+    video_bitrate: str
+    # 音声ビットレート
+    audio_bitrate: str
+    # エンコードタスクのステータス
+    status: EncodingTaskStatusType
+    # タスクの優先度
+    priority: int
+    # エンコード進捗率 (0.0 ~ 100.0)
+    progress: float
+    # 失敗時のエラーメッセージ
+    fail_reason: str
+    # タスクがキューに追加された日時
+    added_at: datetime
+    # エンコードが開始された日時
+    encoding_started_at: datetime | None
+    # エンコードが完了/失敗した日時
+    encoding_finished_at: datetime | None
+
+class EncodingTaskListResponse(BaseModel):
+    """エンコードタスク一覧のレスポンススキーマ"""
+    total: int
+    encoding_tasks: list[EncodingTaskResponse]
+
+class EncodingTaskAddRequest(BaseModel):
+    """エンコードタスク追加のリクエストスキーマ"""
+    # エンコード対象の RecordedVideo の ID
+    recorded_video_id: int
+    # 使用するエンコーダーの種別
+    encoder_type: Annotated[EncoderType, Field(default='FFmpeg')]
+    # 出力映像コーデック
+    video_codec: Annotated[Literal['H.264', 'H.265'], Field(default='H.264')]
+    # エンコーダー固有のプリセット名
+    quality_preset: Annotated[str, Field(default='medium')]
+    # 映像ビットレート
+    video_bitrate: Annotated[str, Field(default='4000k')]
+    # 音声ビットレート
+    audio_bitrate: Annotated[str, Field(default='192k')]
+    # タスクの優先度
+    priority: Annotated[int, Field(default=0)]
+
+class EncodingTaskUpdateRequest(BaseModel):
+    """エンコードタスク更新のリクエストスキーマ"""
+    # タスクの優先度 (変更する場合のみ指定)
+    priority: int | None = None
+    # ステータス変更 (キャンセルのみ許可)
+    status: Literal['Cancelled'] | None = None

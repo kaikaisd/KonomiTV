@@ -39,6 +39,15 @@
                         <Icon class="navigation__link-icon" icon="fluent:timer-16-regular" width="26px" style="padding: 0.5px;" />
                         <span v-if="!iconOnly" class="navigation__link-text">録画予約</span>
                     </router-link>
+                    <router-link v-ripple class="navigation__link" active-class="navigation__link--active" to="/encoding/"
+                        :class="{
+                            'navigation__link--active': $route.path.startsWith('/encoding'),
+                            'navigation__link--icon-only': iconOnly,
+                        }"
+                        v-ftooltip.right="iconOnly ? 'エンコード' : ''">
+                        <Icon class="navigation__link-icon" icon="fluent:video-clip-20-regular" width="26px" />
+                        <span v-if="!iconOnly" class="navigation__link-text">エンコード</span>
+                    </router-link>
                     <router-link v-ripple class="navigation__link" active-class="navigation__link--active" to="/captures/"
                         :class="{
                             'navigation__link--active': $route.path.startsWith('/captures'),
