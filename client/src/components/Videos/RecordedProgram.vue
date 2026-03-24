@@ -115,7 +115,7 @@
                             </template>
                             <v-list-item-title class="ml-3">サムネイルを再生成</v-list-item-title>
                         </v-list-item>
-                        <v-list-item @click="addToEncodingQueue"
+                        <v-list-item @click="show_encoding_dialog = true"
                             :disabled="program.recorded_video.status !== 'Recorded'"
                             v-ftooltip="'録画ファイルをエンコードキューに追加し、MP4 にトランスコードします'">
                             <template v-slot:prepend>
@@ -142,6 +142,60 @@
         </div>
     </router-link>
     <RecordedFileInfoDialog :program="program" v-model:show="show_video_info" />
+
+    <!-- エンコードキュー追加ダイアログ -->
+    <v-dialog max-width="600" v-model="show_encoding_dialog">
+        <v-card>
+            <v-card-title class="d-flex justify-center pt-6 font-weight-bold">エンコードキューに追加</v-card-title>
+            <v-card-text class="pt-4 pb-2">
+                <div class="mb-4">
+                    <div class="text-subtitle-2 mb-1">エンコーダー</div>
+                    <v-select color="primary" variant="outlined" hide-details density="compact"
+                        :items="[
+                            {title: 'FFmpeg', value: 'FFmpeg'},
+                            {title: 'QSVEncC', value: 'QSVEncC'},
+                            {title: 'NVEncC', value: 'NVEncC'},
+                            {title: 'VCEEncC', value: 'VCEEncC'},
+                            {title: 'rkmppenc', value: 'rkmppenc'},
+                        ]"
+                        v-model="encoding_options.encoder_type" />
+                </div>
+                <div class="mb-4">
+                    <div class="text-subtitle-2 mb-1">映像コーデック</div>
+                    <v-select color="primary" variant="outlined" hide-details density="compact"
+                        :items="['H.264', 'H.265']"
+                        v-model="encoding_options.video_codec" />
+                </div>
+                <div class="mb-4">
+                    <div class="text-subtitle-2 mb-1">品質プリセット</div>
+                    <v-select color="primary" variant="outlined" hide-details density="compact"
+                        :items="['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow']"
+                        v-model="encoding_options.quality_preset" />
+                </div>
+                <div class="mb-4">
+                    <div class="text-subtitle-2 mb-1">映像ビットレート</div>
+                    <v-text-field color="primary" variant="outlined" hide-details density="compact"
+                        placeholder="4000k"
+                        v-model="encoding_options.video_bitrate" />
+                </div>
+                <div class="mb-4">
+                    <div class="text-subtitle-2 mb-1">音声ビットレート</div>
+                    <v-text-field color="primary" variant="outlined" hide-details density="compact"
+                        placeholder="192k"
+                        v-model="encoding_options.audio_bitrate" />
+                </div>
+                <div class="mb-2">
+                    <v-switch color="primary" hide-details density="compact" label="CM カットを有効にする"
+                        v-model="encoding_options.cm_removal" />
+                </div>
+            </v-card-text>
+            <v-card-actions class="px-6 pb-5">
+                <v-spacer />
+                <v-btn variant="text" @click="show_encoding_dialog = false">キャンセル</v-btn>
+                <v-btn variant="flat" color="secondary" @click="addToEncodingQueue()">追加</v-btn>
+            </v-card-actions>
+        </v-card>
+    </v-dialog>
 
     <!-- 録画ファイル削除確認ダイアログ -->
     <v-dialog max-width="750" v-model="show_delete_confirmation">
@@ -198,8 +252,9 @@ import { ref, computed } from 'vue';
 
 import RecordedFileInfoDialog from '@/components/Videos/Dialogs/RecordedFileInfoDialog.vue';
 import Message from '@/message';
-import EncodingTasks from '@/services/EncodingTasks';
+import EncodingTasks, { EncoderType } from '@/services/EncodingTasks';
 import SeriesService from '@/services/Series';
+import Settings from '@/services/Settings';
 import Videos, { IRecordedProgram } from '@/services/Videos';
 import useSettingsStore from '@/stores/SettingsStore';
 import useUserStore from '@/stores/UserStore';
@@ -231,6 +286,30 @@ const show_video_info = ref(false);
 const show_delete_confirmation = ref(false);
 // シリーズ除外確認ダイアログの表示状態
 const show_remove_from_series = ref(false);
+// エンコードキュー追加ダイアログの表示状態
+const show_encoding_dialog = ref(false);
+
+// エンコードオプション (サーバー設定のデフォルト値で初期化される)
+const encoding_options = ref({
+    encoder_type: 'FFmpeg' as EncoderType,
+    video_codec: 'H.264' as 'H.264' | 'H.265',
+    quality_preset: 'medium',
+    video_bitrate: '4000k',
+    audio_bitrate: '192k',
+    cm_removal: false,
+});
+
+// サーバー設定からエンコードのデフォルト値を取得して反映
+Settings.fetchServerSettings().then((settings) => {
+    if (settings) {
+        encoding_options.value.encoder_type = settings.encoding.default_encoder_type;
+        encoding_options.value.video_codec = settings.encoding.default_video_codec;
+        encoding_options.value.quality_preset = settings.encoding.default_quality_preset;
+        encoding_options.value.video_bitrate = settings.encoding.default_video_bitrate;
+        encoding_options.value.audio_bitrate = settings.encoding.default_audio_bitrate;
+        encoding_options.value.cm_removal = settings.encoding.default_cm_removal;
+    }
+});
 
 // 録画ファイルのダウンロード (location.href を変更し、ダウンロード自体はブラウザに任せる)
 const downloadVideo = () => {
@@ -257,8 +336,15 @@ const regenerateThumbnail = async () => {
 
 // エンコードキューに追加
 const addToEncodingQueue = async () => {
+    show_encoding_dialog.value = false;
     const result = await EncodingTasks.add({
         recorded_video_id: props.program.recorded_video.id,
+        encoder_type: encoding_options.value.encoder_type,
+        video_codec: encoding_options.value.video_codec,
+        quality_preset: encoding_options.value.quality_preset,
+        video_bitrate: encoding_options.value.video_bitrate,
+        audio_bitrate: encoding_options.value.audio_bitrate,
+        cm_removal: encoding_options.value.cm_removal,
     });
     if (result !== null) {
         Message.success('エンコードキューに追加しました。');

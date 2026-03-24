@@ -141,6 +141,15 @@ export interface IServerSettings {
         end_margin_seconds: number;
         filename_format: string;
     };
+    encoding: {
+        output_directory: string;
+        default_encoder_type: 'FFmpeg' | 'QSVEncC' | 'NVEncC' | 'VCEEncC' | 'rkmppenc';
+        default_video_codec: 'H.264' | 'H.265';
+        default_quality_preset: string;
+        default_video_bitrate: string;
+        default_audio_bitrate: string;
+        default_cm_removal: boolean;
+    };
 }
 
 /* サーバー設定を表すインターフェースのデフォルト値 */
@@ -183,6 +192,15 @@ export const IServerSettingsDefault: IServerSettings = {
     recording: {
         end_margin_seconds: 5,
         filename_format: '',
+    },
+    encoding: {
+        output_directory: '',
+        default_encoder_type: 'FFmpeg',
+        default_video_codec: 'H.264',
+        default_quality_preset: 'medium',
+        default_video_bitrate: '4000k',
+        default_audio_bitrate: '192k',
+        default_cm_removal: false,
     },
 };
 

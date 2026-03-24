@@ -817,6 +817,8 @@ class EncodingTaskResponse(BaseModel):
     video_bitrate: str
     # 音声ビットレート
     audio_bitrate: str
+    # CM 区間を除去するかどうか
+    cm_removal: bool
     # エンコードタスクのステータス
     status: EncodingTaskStatusType
     # タスクの優先度
@@ -851,6 +853,8 @@ class EncodingTaskAddRequest(BaseModel):
     video_bitrate: Annotated[str, Field(default='4000k')]
     # 音声ビットレート
     audio_bitrate: Annotated[str, Field(default='192k')]
+    # CM 区間を除去するかどうか (検出済みの CM 区間情報を利用して、CM 部分をカットしてエンコードする)
+    cm_removal: Annotated[bool, Field(default=False)]
     # タスクの優先度
     priority: Annotated[int, Field(default=0)]
 

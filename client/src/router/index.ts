@@ -181,6 +181,11 @@ const router = createRouter({
             component: () => import('@/views/Settings/Server.vue'),
         },
         {
+            path: '/settings/encoding',
+            name: 'Settings Encoding',
+            component: () => import('@/views/Settings/Encoding.vue'),
+        },
+        {
             path: '/login/',
             name: 'Login',
             component: () => import('@/views/Login.vue'),

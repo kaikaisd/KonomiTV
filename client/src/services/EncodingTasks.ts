@@ -25,6 +25,7 @@ export interface IEncodingTask {
     quality_preset: string;
     video_bitrate: string;
     audio_bitrate: string;
+    cm_removal: boolean;
     status: EncodingTaskStatusType;
     priority: number;
     progress: number;
@@ -52,6 +53,7 @@ export interface IEncodingTaskAddRequest {
     quality_preset?: string;
     video_bitrate?: string;
     audio_bitrate?: string;
+    cm_removal?: boolean;
     priority?: number;
 }
 

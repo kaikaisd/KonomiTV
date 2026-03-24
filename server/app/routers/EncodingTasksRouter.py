@@ -40,6 +40,7 @@ def _taskToResponse(task: EncodingTask) -> schemas.EncodingTaskResponse:
         quality_preset=task.quality_preset,
         video_bitrate=task.video_bitrate,
         audio_bitrate=task.audio_bitrate,
+        cm_removal=task.cm_removal,
         status=task.status,
         priority=task.priority,
         progress=task.progress,
@@ -115,6 +116,7 @@ async def EncodingTaskAddAPI(request: schemas.EncodingTaskAddRequest):
         quality_preset=request.quality_preset,
         video_bitrate=request.video_bitrate,
         audio_bitrate=request.audio_bitrate,
+        cm_removal=request.cm_removal,
         priority=request.priority,
         status='Pending',
     )

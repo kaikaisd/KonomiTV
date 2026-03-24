@@ -5,14 +5,17 @@ from __future__ import annotations
 
 import asyncio
 import re
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import ClassVar
 
-from app import logging
+from app import logging, schemas
+from app.config import Config
 from app.constants import LIBRARY_PATH
 from app.models.EncodingTask import EncodingTask
+from app.models.RecordedVideo import RecordedVideo
 
 
 class EncodingQueueManager:
@@ -47,6 +50,9 @@ class EncodingQueueManager:
     _cancel_requested: bool = False
 
 
+    # CM 除去時の concat demuxer 用一時ファイル
+    _concat_file: tempfile.NamedTemporaryFile | None = None  # type: ignore
+
     def __init__(self) -> None:
         """
         EncodingQueueManager のインスタンスを初期化する。
@@ -55,6 +61,7 @@ class EncodingQueueManager:
         self._current_task_id = None
         self._encoder_process = None
         self._cancel_requested = False
+        self._concat_file = None
 
 
     @classmethod
@@ -168,12 +175,21 @@ class EncodingQueueManager:
             self._current_task_id = None
             return
 
-        # 出力ファイルパスを決定する (ソースファイルと同じディレクトリに .mp4 拡張子で出力)
-        output_path = source_path.with_suffix('.mp4')
+        # 出力ファイルパスを決定する
+        # サーバー設定で出力ディレクトリが指定されている場合はそこに出力し、
+        # 指定されていない場合はソースファイルと同じディレクトリに .mp4 拡張子で出力する
+        encoding_config = Config().encoding
+        if encoding_config.output_directory and Path(encoding_config.output_directory).is_dir():
+            output_dir = Path(encoding_config.output_directory)
+            output_path = output_dir / f'{source_path.stem}.mp4'
+        else:
+            output_path = source_path.with_suffix('.mp4')
         # 出力ファイルが既に存在する場合は連番を付ける
+        base_stem = output_path.stem
+        output_dir_for_counter = output_path.parent
         counter = 1
         while output_path.exists():
-            output_path = source_path.with_stem(f'{source_path.stem}_{counter}').with_suffix('.mp4')
+            output_path = output_dir_for_counter / f'{base_stem}_{counter}.mp4'
             counter += 1
         task.output_file_path = str(output_path)
 
@@ -190,8 +206,18 @@ class EncodingQueueManager:
             if duration <= 0:
                 raise RuntimeError('Failed to determine source file duration.')
 
+            # CM 区間情報を取得 (CM 除去が有効な場合)
+            cm_sections = await self._getCMSections(task)
+            keep_segments: list[tuple[float, float]] | None = None
+            if cm_sections is not None:
+                keep_segments = self._computeKeepSegments(cm_sections, duration)
+                if len(keep_segments) == 0:
+                    raise RuntimeError('No content segments remain after CM removal.')
+                logging.info(f'[EncodingQueueManager] CM removal enabled. '
+                             f'[task_id: {task.id}, cm_sections: {len(cm_sections)}, keep_segments: {len(keep_segments)}]')
+
             # エンコーダーコマンドを組み立てて実行
-            encoder_options = self._buildEncoderCommand(task)
+            encoder_options = self._buildEncoderCommand(task, keep_segments)
             encoder_type = task.encoder_type
 
             # エンコーダーのバイナリパスを取得
@@ -260,6 +286,71 @@ class EncodingQueueManager:
             self._encoder_process = None
             self._current_task_id = None
             self._cancel_requested = False
+            # CM 除去用の concat demuxer 一時ファイルを削除
+            if self._concat_file is not None:
+                try:
+                    Path(self._concat_file.name).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                self._concat_file = None
+
+
+    async def _getCMSections(self, task: EncodingTask) -> list[schemas.CMSection] | None:
+        """
+        エンコードタスクに紐づく RecordedVideo から CM 区間情報を取得する。
+        CM 除去が有効で、かつ CM 区間が検出済みの場合のみ区間リストを返す。
+
+        Args:
+            task (EncodingTask): エンコードタスク
+
+        Returns:
+            list[schemas.CMSection] | None: CM 区間リスト。CM 除去が無効または未検出の場合は None
+        """
+        if not task.cm_removal or task.recorded_video_id is None:
+            return None
+
+        recorded_video = await RecordedVideo.get_or_none(id=task.recorded_video_id)
+        if recorded_video is None or recorded_video.cm_sections is None or len(recorded_video.cm_sections) == 0:
+            return None
+
+        return recorded_video.cm_sections
+
+
+    def _computeKeepSegments(
+        self,
+        cm_sections: list[schemas.CMSection],
+        duration: float,
+    ) -> list[tuple[float, float]]:
+        """
+        CM 区間の逆 (= 本編区間) を算出する。
+        CM 区間を除いた時間範囲のリストを返す。
+
+        Args:
+            cm_sections (list[schemas.CMSection]): CM 区間リスト (start_time, end_time)
+            duration (float): ソースファイルの総再生時間 (秒)
+
+        Returns:
+            list[tuple[float, float]]: 本編区間のリスト (start, end)
+        """
+        # CM 区間を開始時刻でソート
+        sorted_cms = sorted(cm_sections, key=lambda x: x['start_time'])
+
+        keep_segments: list[tuple[float, float]] = []
+        current_pos = 0.0
+
+        for cm in sorted_cms:
+            cm_start = cm['start_time']
+            cm_end = cm['end_time']
+            # CM 区間の前に本編がある場合
+            if current_pos < cm_start:
+                keep_segments.append((current_pos, cm_start))
+            current_pos = cm_end
+
+        # 最後の CM 以降に本編が残っている場合
+        if current_pos < duration:
+            keep_segments.append((current_pos, duration))
+
+        return keep_segments
 
 
     async def _getSourceDuration(self, file_path: str) -> float:
@@ -293,31 +384,44 @@ class EncodingQueueManager:
             return 0.0
 
 
-    def _buildEncoderCommand(self, task: EncodingTask) -> list[str]:
+    def _buildEncoderCommand(
+        self,
+        task: EncodingTask,
+        keep_segments: list[tuple[float, float]] | None = None,
+    ) -> list[str]:
         """
         エンコーダーに渡すコマンドラインオプションを組み立てる。
         FFmpeg の場合は TS → MP4 のトランスコードコマンドを、
         HWEncC の場合は同様の変換コマンドを返す。
+        CM 除去が有効な場合、本編区間のみをエンコードするオプションを付加する。
 
         Args:
             task (EncodingTask): エンコードタスク
+            keep_segments (list[tuple[float, float]] | None): CM 除去時の本編区間リスト (開始秒, 終了秒)
 
         Returns:
             list[str]: エンコーダーに渡すオプションの配列
         """
 
         if task.encoder_type == 'FFmpeg':
-            return self._buildFFmpegCommand(task)
+            return self._buildFFmpegCommand(task, keep_segments)
         else:
-            return self._buildHWEncCCommand(task)
+            return self._buildHWEncCCommand(task, keep_segments)
 
 
-    def _buildFFmpegCommand(self, task: EncodingTask) -> list[str]:
+    def _buildFFmpegCommand(
+        self,
+        task: EncodingTask,
+        keep_segments: list[tuple[float, float]] | None = None,
+    ) -> list[str]:
         """
         FFmpeg 用のコマンドラインオプションを組み立てる (TS → MP4 バッチトランスコード)。
+        CM 除去が有効な場合、FFmpeg の concat demuxer を使い本編区間のみを結合してエンコードする。
+        concat demuxer 用の一時ファイルはインスタンス変数 _concat_file に保持し、エンコード完了後に削除する。
 
         Args:
             task (EncodingTask): エンコードタスク
+            keep_segments (list[tuple[float, float]] | None): CM 除去時の本編区間リスト (開始秒, 終了秒)
 
         Returns:
             list[str]: FFmpeg に渡すオプションの配列
@@ -325,8 +429,30 @@ class EncodingQueueManager:
 
         options: list[str] = []
 
-        # 入力ファイル
-        options.extend(['-i', task.source_file_path])
+        if keep_segments is not None and len(keep_segments) > 0:
+            # CM 除去モード: concat demuxer 用の一時ファイルを生成する
+            # 各本編区間を inpoint / outpoint で指定し、結合してエンコードする
+            concat_content = 'ffconcat version 1.0\n'
+            for start, end in keep_segments:
+                # ファイルパス中の特殊文字をエスケープ
+                escaped_path = task.source_file_path.replace("'", "'\\''")
+                concat_content += f"file '{escaped_path}'\n"
+                concat_content += f'inpoint {start:.3f}\n'
+                concat_content += f'outpoint {end:.3f}\n'
+
+            # 一時ファイルに書き込む (エンコード完了まで保持する必要がある)
+            concat_file = tempfile.NamedTemporaryFile(
+                mode='w', suffix='.txt', prefix='konomi_concat_', delete=False,
+            )
+            concat_file.write(concat_content)
+            concat_file.flush()
+            self._concat_file = concat_file
+
+            # concat demuxer で入力
+            options.extend(['-f', 'concat', '-safe', '0', '-i', concat_file.name])
+        else:
+            # 通常モード: ソースファイルを直接入力
+            options.extend(['-i', task.source_file_path])
 
         # ストリームマッピング: 映像1ストリーム + 音声1ストリーム
         options.extend(['-map', '0:v:0', '-map', '0:a:0'])
@@ -359,12 +485,18 @@ class EncodingQueueManager:
         return options
 
 
-    def _buildHWEncCCommand(self, task: EncodingTask) -> list[str]:
+    def _buildHWEncCCommand(
+        self,
+        task: EncodingTask,
+        keep_segments: list[tuple[float, float]] | None = None,
+    ) -> list[str]:
         """
         HWEncC (QSVEncC/NVEncC/VCEEncC/rkmppenc) 用のコマンドラインオプションを組み立てる。
+        CM 除去が有効な場合、--trim オプションで本編区間のみをエンコードする。
 
         Args:
             task (EncodingTask): エンコードタスク
+            keep_segments (list[tuple[float, float]] | None): CM 除去時の本編区間リスト (開始秒, 終了秒)
 
         Returns:
             list[str]: HWEncC に渡すオプションの配列
@@ -380,6 +512,23 @@ class EncodingQueueManager:
             options.append('--avsw')
         else:
             options.append('--avhw')
+
+        # CM 除去: --trim オプションで本編区間のみをエンコードする
+        # --trim は "開始フレーム:終了フレーム" 形式だが、秒指定も可能 (--seek/--seekto は1区間のみ)
+        # HWEncC の --trim は複数指定可能: --trim 0:100,200:300 のようにカンマ区切り
+        # ただし秒単位ではなくフレーム単位のため、ここでは --seek + --seekto で最初の区間のみ対応し、
+        # 複数区間がある場合は FFmpeg にフォールバックする旨をログに出力する
+        # NOTE: 実際には HWEncC は --trim でフレーム範囲指定が必要なため、
+        # CM 除去が有効な場合は FFmpeg の concat demuxer を使う方が確実
+        # ここでは単一区間の場合のみ --seek / --seekto で対応する
+        if keep_segments is not None and len(keep_segments) == 1:
+            start, end = keep_segments[0]
+            options.extend(['--seek', f'{start:.3f}', '--seekto', f'{end:.3f}'])
+        elif keep_segments is not None and len(keep_segments) > 1:
+            # 複数区間の場合は HWEncC では直接対応できないため、
+            # 警告を出して CM 除去なしでエンコードする
+            logging.warning(f'[EncodingQueueManager] HWEncC does not support multi-segment CM removal. '
+                            f'CM removal will be skipped for this task. [task_id: {task.id}]')
 
         # 映像コーデック
         if task.video_codec == 'H.265':

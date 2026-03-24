@@ -372,6 +372,24 @@ class _ServerSettingsRecording(BaseModel):
     # 空文字列の場合は {TITLE}_{YEAR}{MONTH}{DAY}_{HOUR}{MIN}{SEC}_{CHANNEL} 相当のデフォルト形式を使用する
     filename_format: str = ''
 
+class _ServerSettingsEncoding(BaseModel):
+    # エンコード済みファイルの出力先ディレクトリ
+    # 空文字列の場合はソースファイルと同じディレクトリに出力する
+    output_directory: str = ''
+    # デフォルトのエンコーダーの種別
+    default_encoder_type: Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC', 'rkmppenc'] = 'FFmpeg'
+    # デフォルトの出力映像コーデック
+    default_video_codec: Literal['H.264', 'H.265'] = 'H.264'
+    # デフォルトのエンコーダー固有のプリセット名 (例: 'medium', 'fast', 'slow')
+    default_quality_preset: str = 'medium'
+    # デフォルトの映像ビットレート (例: '4000k')
+    default_video_bitrate: str = '4000k'
+    # デフォルトの音声ビットレート (例: '192k')
+    default_audio_bitrate: str = '192k'
+    # デフォルトで CM 区間を除去するかどうか
+    # CM 区間が検出済みの録画ファイルでのみ有効
+    default_cm_removal: bool = False
+
 class ServerSettings(BaseModel):
     general: _ServerSettingsGeneral = _ServerSettingsGeneral()
     server: _ServerSettingsServer = _ServerSettingsServer()
@@ -380,6 +398,7 @@ class ServerSettings(BaseModel):
     capture: _ServerSettingsCapture = _ServerSettingsCapture()
     notification: _ServerSettingsNotification = _ServerSettingsNotification()
     recording: _ServerSettingsRecording = _ServerSettingsRecording()
+    encoding: _ServerSettingsEncoding = _ServerSettingsEncoding()
 
 
 # サーバー設定データと読み込み・保存用の関数

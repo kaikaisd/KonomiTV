@@ -60,6 +60,9 @@ class EncodingTask(TortoiseModel):
     # 音声ビットレート (例: '192k')
     audio_bitrate = fields.CharField(50, default='192k')
 
+    # CM 区間を除去するかどうか (検出済みの CM 区間情報を利用して、CM 部分をカットしてエンコードする)
+    cm_removal = fields.BooleanField(default=False)
+
     # ***** 状態管理 *****
 
     # エンコードタスクのステータス
