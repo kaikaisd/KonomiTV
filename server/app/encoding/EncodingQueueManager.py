@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -50,9 +49,6 @@ class EncodingQueueManager:
     _cancel_requested: bool = False
 
 
-    # CM 除去時の concat demuxer 用一時ファイル
-    _concat_file: tempfile.NamedTemporaryFile | None = None  # type: ignore
-
     def __init__(self) -> None:
         """
         EncodingQueueManager のインスタンスを初期化する。
@@ -61,7 +57,6 @@ class EncodingQueueManager:
         self._current_task_id = None
         self._encoder_process = None
         self._cancel_requested = False
-        self._concat_file = None
 
 
     @classmethod
@@ -216,8 +211,16 @@ class EncodingQueueManager:
                 logging.info(f'[EncodingQueueManager] CM removal enabled. '
                              f'[task_id: {task.id}, cm_sections: {len(cm_sections)}, keep_segments: {len(keep_segments)}]')
 
+            # HWEncC の CM 除去に必要なソース映像のフレームレートを RecordedVideo から取得する
+            # HWEncC の --trim オプションはフレーム番号で指定するため、秒からフレーム番号への変換に使う
+            source_frame_rate: float | None = None
+            if keep_segments is not None and task.encoder_type != 'FFmpeg' and task.recorded_video_id is not None:
+                recorded_video = await RecordedVideo.get_or_none(id=task.recorded_video_id)
+                if recorded_video is not None:
+                    source_frame_rate = recorded_video.video_frame_rate
+
             # エンコーダーコマンドを組み立てて実行
-            encoder_options = self._buildEncoderCommand(task, keep_segments)
+            encoder_options = self._buildEncoderCommand(task, keep_segments, source_frame_rate)
             encoder_type = task.encoder_type
 
             # エンコーダーのバイナリパスを取得
@@ -286,13 +289,6 @@ class EncodingQueueManager:
             self._encoder_process = None
             self._current_task_id = None
             self._cancel_requested = False
-            # CM 除去用の concat demuxer 一時ファイルを削除
-            if self._concat_file is not None:
-                try:
-                    Path(self._concat_file.name).unlink(missing_ok=True)
-                except Exception:
-                    pass
-                self._concat_file = None
 
 
     async def _getCMSections(self, task: EncodingTask) -> list[schemas.CMSection] | None:
@@ -388,6 +384,7 @@ class EncodingQueueManager:
         self,
         task: EncodingTask,
         keep_segments: list[tuple[float, float]] | None = None,
+        source_frame_rate: float | None = None,
     ) -> list[str]:
         """
         エンコーダーに渡すコマンドラインオプションを組み立てる。
@@ -398,6 +395,7 @@ class EncodingQueueManager:
         Args:
             task (EncodingTask): エンコードタスク
             keep_segments (list[tuple[float, float]] | None): CM 除去時の本編区間リスト (開始秒, 終了秒)
+            source_frame_rate (float | None): HWEncC の --trim 計算に使うソース映像のフレームレート
 
         Returns:
             list[str]: エンコーダーに渡すオプションの配列
@@ -406,7 +404,7 @@ class EncodingQueueManager:
         if task.encoder_type == 'FFmpeg':
             return self._buildFFmpegCommand(task, keep_segments)
         else:
-            return self._buildHWEncCCommand(task, keep_segments)
+            return self._buildHWEncCCommand(task, keep_segments, source_frame_rate)
 
 
     def _buildFFmpegCommand(
@@ -416,8 +414,12 @@ class EncodingQueueManager:
     ) -> list[str]:
         """
         FFmpeg 用のコマンドラインオプションを組み立てる (TS → MP4 バッチトランスコード)。
-        CM 除去が有効な場合、FFmpeg の concat demuxer を使い本編区間のみを結合してエンコードする。
-        concat demuxer 用の一時ファイルはインスタンス変数 _concat_file に保持し、エンコード完了後に削除する。
+
+        CM 除去が有効な場合は trim/atrim/setpts/asetpts/concat フィルターグラフを使用する。
+        concat demuxer の inpoint/outpoint は TS ファイルの生の PTS (放送タイムスタンプ起点で
+        通常 126144 秒付近から始まる) と比較されるため、cm_sections の再生相対秒とは一致せず
+        シークが失敗する。trim フィルターはデコード後のフレームストリームに作用し、FFmpeg が
+        入力時に正規化した再生相対タイムスタンプと比較するため、cm_sections の値と正確に一致する。
 
         Args:
             task (EncodingTask): エンコードタスク
@@ -429,48 +431,49 @@ class EncodingQueueManager:
 
         options: list[str] = []
 
+        # 入力ファイル (CM 除去の有無にかかわらず同じ入力を使う)
+        options.extend(['-i', task.source_file_path])
+
         if keep_segments is not None and len(keep_segments) > 0:
-            # CM 除去モード: concat demuxer 用の一時ファイルを生成する
-            # 各本編区間を inpoint / outpoint で指定し、結合してエンコードする
-            concat_content = 'ffconcat version 1.0\n'
-            for start, end in keep_segments:
-                # ファイルパス中の特殊文字をエスケープ
-                escaped_path = task.source_file_path.replace("'", "'\\''")
-                concat_content += f"file '{escaped_path}'\n"
-                concat_content += f'inpoint {start:.3f}\n'
-                concat_content += f'outpoint {end:.3f}\n'
+            # CM 除去モード: trim/atrim フィルターで各本編区間を切り出し、setpts/asetpts で
+            # タイムスタンプをリセットしてから concat フィルターで結合し、最後に yadif を適用する
+            # 各区間のタイムスタンプをリセットしないと concat 後に不連続なタイムスタンプになる
+            filter_parts: list[str] = []
+            for i, (start, end) in enumerate(keep_segments):
+                # 映像: 区間を trim で切り出し、PTS を区間先頭基準にリセット
+                filter_parts.append(
+                    f'[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{i}]'
+                )
+                # 音声: 区間を atrim で切り出し、PTS を区間先頭基準にリセット
+                filter_parts.append(
+                    f'[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{i}]'
+                )
 
-            # 一時ファイルに書き込む (エンコード完了まで保持する必要がある)
-            concat_file = tempfile.NamedTemporaryFile(
-                mode='w', suffix='.txt', prefix='konomi_concat_', delete=False,
-            )
-            concat_file.write(concat_content)
-            concat_file.flush()
-            self._concat_file = concat_file
+            # 各区間のラベルを結合して concat フィルターへ渡す
+            n = len(keep_segments)
+            concat_inputs = ''.join(f'[v{i}][a{i}]' for i in range(n))
+            filter_parts.append(f'{concat_inputs}concat=n={n}:v=1:a=1[v_concat][aout]')
 
-            # concat demuxer で入力
-            options.extend(['-f', 'concat', '-safe', '0', '-i', concat_file.name])
+            # インターレース解除は concat 後に一括適用 (区間ごとに適用すると
+            # 区間先頭の参照フレーム欠如で画質が劣化するため、後段でまとめて処理する)
+            filter_parts.append('[v_concat]yadif=mode=0:parity=-1:deint=1[vout]')
+
+            options.extend(['-filter_complex', ';'.join(filter_parts)])
+            options.extend(['-map', '[vout]', '-map', '[aout]'])
         else:
-            # 通常モード: ソースファイルを直接入力
-            options.extend(['-i', task.source_file_path])
-
-        # ストリームマッピング: 映像1ストリーム + 音声1ストリーム
-        options.extend(['-map', '0:v:0', '-map', '0:a:0'])
+            # 通常モード: ストリームマッピングと yadif フィルターを直接指定
+            options.extend(['-map', '0:v:0', '-map', '0:a:0'])
+            options.extend(['-vf', 'yadif=mode=0:parity=-1:deint=1'])
 
         # 映像コーデック
         if task.video_codec == 'H.265':
-            options.extend(['-vcodec', 'libx265'])
-            options.extend(['-profile:v', 'main'])
+            options.extend(['-vcodec', 'libx265', '-profile:v', 'main'])
         else:
-            options.extend(['-vcodec', 'libx264'])
-            options.extend(['-profile:v', 'high'])
+            options.extend(['-vcodec', 'libx264', '-profile:v', 'high'])
 
         # 映像ビットレートとプリセット
         options.extend(['-b:v', task.video_bitrate])
         options.extend(['-preset', task.quality_preset])
-
-        # インターレース解除 (yadif フィルタ)
-        options.extend(['-vf', 'yadif=mode=0:parity=-1:deint=1'])
 
         # ピクセルフォーマット
         options.extend(['-pix_fmt', 'yuv420p'])
@@ -478,7 +481,7 @@ class EncodingQueueManager:
         # 音声コーデック
         options.extend(['-acodec', 'aac', '-ac', '2', '-ab', task.audio_bitrate, '-ar', '48000'])
 
-        # 出力形式: MP4
+        # 出力形式: MP4 (moov atom を先頭に配置してストリーミング再生を可能にする)
         options.extend(['-movflags', '+faststart'])
         options.extend(['-y', task.output_file_path])
 
@@ -489,14 +492,21 @@ class EncodingQueueManager:
         self,
         task: EncodingTask,
         keep_segments: list[tuple[float, float]] | None = None,
+        source_frame_rate: float | None = None,
     ) -> list[str]:
         """
         HWEncC (QSVEncC/NVEncC/VCEEncC/rkmppenc) 用のコマンドラインオプションを組み立てる。
-        CM 除去が有効な場合、--trim オプションで本編区間のみをエンコードする。
+
+        CM 除去が有効な場合は --trim でフレーム番号範囲を指定する。
+        --seek/--seekto は連続した単一区間しか扱えず、かつ TS の生 PTS とのミスマッチで
+        シーク位置が正しくない。--trim はフレーム番号ベースであり TS タイムスタンプに依存せず、
+        複数区間 (カンマ区切り) も指定できるため CM 除去に適している。
+        フレーム番号への変換は RecordedVideo.video_frame_rate を使って行う。
 
         Args:
             task (EncodingTask): エンコードタスク
             keep_segments (list[tuple[float, float]] | None): CM 除去時の本編区間リスト (開始秒, 終了秒)
+            source_frame_rate (float | None): ソース映像のフレームレート (秒→フレーム変換に使用)
 
         Returns:
             list[str]: HWEncC に渡すオプションの配列
@@ -513,22 +523,24 @@ class EncodingQueueManager:
         else:
             options.append('--avhw')
 
-        # CM 除去: --trim オプションで本編区間のみをエンコードする
-        # --trim は "開始フレーム:終了フレーム" 形式だが、秒指定も可能 (--seek/--seekto は1区間のみ)
-        # HWEncC の --trim は複数指定可能: --trim 0:100,200:300 のようにカンマ区切り
-        # ただし秒単位ではなくフレーム単位のため、ここでは --seek + --seekto で最初の区間のみ対応し、
-        # 複数区間がある場合は FFmpeg にフォールバックする旨をログに出力する
-        # NOTE: 実際には HWEncC は --trim でフレーム範囲指定が必要なため、
-        # CM 除去が有効な場合は FFmpeg の concat demuxer を使う方が確実
-        # ここでは単一区間の場合のみ --seek / --seekto で対応する
-        if keep_segments is not None and len(keep_segments) == 1:
-            start, end = keep_segments[0]
-            options.extend(['--seek', f'{start:.3f}', '--seekto', f'{end:.3f}'])
-        elif keep_segments is not None and len(keep_segments) > 1:
-            # 複数区間の場合は HWEncC では直接対応できないため、
-            # 警告を出して CM 除去なしでエンコードする
-            logging.warning(f'[EncodingQueueManager] HWEncC does not support multi-segment CM removal. '
-                            f'CM removal will be skipped for this task. [task_id: {task.id}]')
+        # CM 除去: --trim でフレーム番号範囲を指定する (複数区間カンマ区切り対応)
+        # フレームレートが既知でなければ CM 除去をスキップして警告を出す
+        if keep_segments is not None and len(keep_segments) > 0:
+            if source_frame_rate is not None and source_frame_rate > 0:
+                fps = source_frame_rate
+                trim_ranges = []
+                for start, end in keep_segments:
+                    # 秒をフレーム番号に変換する (--trim の end は inclusive なため -1 する)
+                    start_frame = int(start * fps)
+                    end_frame = max(int(end * fps) - 1, start_frame)
+                    trim_ranges.append(f'{start_frame}:{end_frame}')
+                options.extend(['--trim', ','.join(trim_ranges)])
+                logging.info(f'[EncodingQueueManager] HWEncC CM removal via --trim. '
+                             f'[task_id: {task.id}, fps: {fps}, ranges: {",".join(trim_ranges)}]')
+            else:
+                # フレームレート不明の場合は CM 除去をスキップ
+                logging.warning(f'[EncodingQueueManager] Cannot apply CM removal for HWEncC: '
+                                f'source frame rate unknown. CM removal will be skipped. [task_id: {task.id}]')
 
         # 映像コーデック
         if task.video_codec == 'H.265':
