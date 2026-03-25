@@ -840,21 +840,28 @@ class EncodingTaskListResponse(BaseModel):
     encoding_tasks: list[EncodingTaskResponse]
 
 class EncodingTaskAddRequest(BaseModel):
-    """エンコードタスク追加のリクエストスキーマ"""
+    """
+    エンコードタスク追加のリクエストスキーマ。
+    profile_name が指定された場合はサーバー設定のエンコードプロファイルから設定値を読み込む。
+    個別のパラメータが指定された場合はプロファイルの値を上書きする。
+    """
     # エンコード対象の RecordedVideo の ID
     recorded_video_id: int
-    # 使用するエンコーダーの種別
-    encoder_type: Annotated[EncoderType, Field(default='FFmpeg')]
-    # 出力映像コーデック
-    video_codec: Annotated[Literal['H.264', 'H.265'], Field(default='H.264')]
-    # エンコーダー固有のプリセット名
-    quality_preset: Annotated[str, Field(default='medium')]
-    # 映像ビットレート
-    video_bitrate: Annotated[str, Field(default='4000k')]
-    # 音声ビットレート
-    audio_bitrate: Annotated[str, Field(default='192k')]
-    # CM 区間を除去するかどうか (検出済みの CM 区間情報を利用して、CM 部分をカットしてエンコードする)
-    cm_removal: Annotated[bool, Field(default=False)]
+    # 使用するエンコードプロファイル名 (サーバー設定で定義されたプロファイルから選択)
+    # 省略時はサーバー設定のデフォルトプロファイルが使用される
+    profile_name: Annotated[str | None, Field(default=None)]
+    # 使用するエンコーダーの種別 (プロファイルの値を上書きする場合に指定)
+    encoder_type: Annotated[EncoderType | None, Field(default=None)]
+    # 出力映像コーデック (プロファイルの値を上書きする場合に指定)
+    video_codec: Annotated[Literal['H.264', 'H.265'] | None, Field(default=None)]
+    # エンコーダー固有のプリセット名 (プロファイルの値を上書きする場合に指定)
+    quality_preset: Annotated[str | None, Field(default=None)]
+    # 映像ビットレート (プロファイルの値を上書きする場合に指定)
+    video_bitrate: Annotated[str | None, Field(default=None)]
+    # 音声ビットレート (プロファイルの値を上書きする場合に指定)
+    audio_bitrate: Annotated[str | None, Field(default=None)]
+    # CM 区間を除去するかどうか (プロファイルの値を上書きする場合に指定)
+    cm_removal: Annotated[bool | None, Field(default=None)]
     # タスクの優先度
     priority: Annotated[int, Field(default=0)]
 

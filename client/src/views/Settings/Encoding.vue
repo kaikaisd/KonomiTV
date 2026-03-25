@@ -16,6 +16,7 @@
             変更を反映するには KonomiTV サーバーの再起動が必要です。<br>
         </div>
         <div class="settings__content" :class="{'settings__content--disabled': is_disabled}">
+            <!-- 出力先セクション -->
             <div class="settings__content-heading">
                 <Icon icon="fluent:folder-open-20-filled" width="22px" />
                 <span class="ml-2">出力先</span>
@@ -31,85 +32,94 @@
                     placeholder="例: E:\TV-Encoded"
                     v-model="server_settings.encoding.output_directory" />
             </div>
+
+            <!-- デフォルトプロファイルセクション -->
             <div class="settings__content-heading mt-6">
-                <Icon icon="fluent:settings-20-filled" width="22px" />
-                <span class="ml-2">デフォルトのエンコード設定</span>
+                <Icon icon="fluent:checkmark-circle-20-filled" width="22px" />
+                <span class="ml-2">デフォルトプロファイル</span>
             </div>
             <div class="settings__item">
-                <div class="settings__item-heading">利用するエンコーダー</div>
+                <div class="settings__item-heading">エンコードキュー追加時に使用するデフォルトプロファイル</div>
                 <div class="settings__item-label">
-                    エンコードキューに追加する際のデフォルトのエンコーダーを設定します。<br>
-                    タスク追加時に個別に変更することも可能です。<br>
+                    録画番組カードからエンコードキューに追加する際に、初期選択されるプロファイルを設定します。<br>
                 </div>
                 <v-select class="settings__item-form" color="primary" variant="outlined" hide-details
                     :density="is_form_dense ? 'compact' : 'default'"
-                    :items="[
-                        {title: 'FFmpeg : ソフトウェアエンコーダー', value: 'FFmpeg'},
-                        {title: 'QSVEncC : Intel Graphics 搭載 CPU / Intel Arc GPU で利用可能', value: 'QSVEncC'},
-                        {title: 'NVEncC : NVIDIA GPU で利用可能', value: 'NVEncC'},
-                        {title: 'VCEEncC : AMD GPU で利用可能', value: 'VCEEncC'},
-                        {title: 'rkmppenc : Rockchip RK3588 系 SoC 搭載 SBC で利用可能', value: 'rkmppenc'},
-                    ]"
-                    v-model="server_settings.encoding.default_encoder_type" />
+                    :items="profileNames"
+                    v-model="server_settings.encoding.default_profile_name" />
             </div>
-            <div class="settings__item">
-                <div class="settings__item-heading">映像コーデック</div>
-                <div class="settings__item-label">
-                    エンコードに使用する映像コーデックを選択します。<br>
-                    H.265 は H.264 よりも高い圧縮効率を持ちますが、エンコード速度が遅くなります。<br>
-                </div>
-                <v-select class="settings__item-form" color="primary" variant="outlined" hide-details
-                    :density="is_form_dense ? 'compact' : 'default'"
-                    :items="['H.264', 'H.265']"
-                    v-model="server_settings.encoding.default_video_codec" />
-            </div>
-            <div class="settings__item">
-                <div class="settings__item-heading">品質プリセット</div>
-                <div class="settings__item-label">
-                    FFmpeg のエンコード速度プリセットを設定します。<br>
-                    slower / slow は品質が高くなりますが、エンコード速度が遅くなります。<br>
-                </div>
-                <v-select class="settings__item-form" color="primary" variant="outlined" hide-details
-                    :density="is_form_dense ? 'compact' : 'default'"
-                    :items="['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow']"
-                    v-model="server_settings.encoding.default_quality_preset" />
-            </div>
-            <div class="settings__item">
-                <div class="settings__item-heading">映像ビットレート</div>
-                <div class="settings__item-label">
-                    エンコード後の映像ビットレートを設定します。<br>
-                    例: 4000k (4Mbps)、8000k (8Mbps) など。<br>
-                </div>
-                <v-text-field class="settings__item-form" color="primary" variant="outlined" hide-details
-                    :density="is_form_dense ? 'compact' : 'default'"
-                    placeholder="4000k"
-                    v-model="server_settings.encoding.default_video_bitrate" />
-            </div>
-            <div class="settings__item">
-                <div class="settings__item-heading">音声ビットレート</div>
-                <div class="settings__item-label">
-                    エンコード後の音声ビットレートを設定します。<br>
-                    例: 192k (192kbps)、256k (256kbps) など。<br>
-                </div>
-                <v-text-field class="settings__item-form" color="primary" variant="outlined" hide-details
-                    :density="is_form_dense ? 'compact' : 'default'"
-                    placeholder="192k"
-                    v-model="server_settings.encoding.default_audio_bitrate" />
-            </div>
+
+            <!-- エンコードプロファイル一覧セクション -->
             <div class="settings__content-heading mt-6">
-                <Icon icon="fluent:cut-20-filled" width="22px" />
-                <span class="ml-2">CM カット</span>
+                <Icon icon="fluent:list-20-filled" width="22px" />
+                <span class="ml-2">エンコードプロファイル</span>
             </div>
-            <div class="settings__item settings__item--switch">
-                <div class="settings__item-heading">デフォルトで CM カットを有効にする</div>
+            <div class="settings__item">
                 <div class="settings__item-label">
-                    エンコードキューに追加する際に、デフォルトで CM (広告) 区間を自動的にカットします。<br>
-                    CM 区間の検出はメタデータ解析時に自動的に行われ、検出済みの CM 区間情報が利用されます。<br>
-                    CM 区間が検出されていない録画ファイルでは、CM カットはスキップされます。<br>
+                    エンコードプロファイルには、エンコーダー・コーデック・ビットレート・CM カットなどの設定をまとめて保存できます。<br>
+                    Amatsukaze のエンコードプロファイルと同様に、用途に応じて複数のプロファイルを作成できます。<br>
                 </div>
-                <v-switch class="settings__item-switch" color="primary" hide-details
-                    v-model="server_settings.encoding.default_cm_removal" />
             </div>
+
+            <!-- プロファイルカード -->
+            <v-card v-for="(profile, index) in server_settings.encoding.profiles" :key="'profile-' + index"
+                class="encoding-profile-card mb-4" variant="outlined">
+                <v-card-text class="pa-4">
+                    <!-- プロファイル名 -->
+                    <div class="d-flex align-center mb-3">
+                        <v-text-field color="primary" variant="outlined" hide-details density="compact"
+                            label="プロファイル名"
+                            v-model="profile.name" />
+                        <button v-ripple class="settings__item-delete-button ml-2"
+                            @click="removeProfile(index)">
+                            <svg class="iconify iconify--fluent" width="20px" height="20px" viewBox="0 0 16 16">
+                                <path fill="currentColor" d="M7 3h2a1 1 0 0 0-2 0ZM6 3a2 2 0 1 1 4 0h4a.5.5 0 0 1 0 1h-.564l-1.205 8.838A2.5 2.5 0 0 1 9.754 15H6.246a2.5 2.5 0 0 1-2.477-2.162L2.564 4H2a.5.5 0 0 1 0-1h4Zm1 3.5a.5.5 0 0 0-1 0v5a.5.5 0 0 0 1 0v-5ZM9.5 6a.5.5 0 0 0-.5.5v5a.5.5 0 0 0 1 0v-5a.5.5 0 0 0-.5-.5Z"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <!-- エンコーダー -->
+                    <div class="mb-3">
+                        <v-select color="primary" variant="outlined" hide-details density="compact"
+                            label="エンコーダー"
+                            :items="encoderTypeItems"
+                            v-model="profile.encoder_type" />
+                    </div>
+                    <!-- 映像コーデック -->
+                    <div class="mb-3">
+                        <v-select color="primary" variant="outlined" hide-details density="compact"
+                            label="映像コーデック"
+                            :items="['H.264', 'H.265']"
+                            v-model="profile.video_codec" />
+                    </div>
+                    <!-- 品質プリセット -->
+                    <div class="mb-3">
+                        <v-select color="primary" variant="outlined" hide-details density="compact"
+                            label="品質プリセット"
+                            :items="['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow']"
+                            v-model="profile.quality_preset" />
+                    </div>
+                    <!-- 映像ビットレート / 音声ビットレート (横並び) -->
+                    <div class="d-flex mb-3" style="gap: 12px;">
+                        <v-text-field color="primary" variant="outlined" hide-details density="compact"
+                            label="映像ビットレート" placeholder="4000k"
+                            v-model="profile.video_bitrate" style="flex: 1;" />
+                        <v-text-field color="primary" variant="outlined" hide-details density="compact"
+                            label="音声ビットレート" placeholder="192k"
+                            v-model="profile.audio_bitrate" style="flex: 1;" />
+                    </div>
+                    <!-- CM カット -->
+                    <v-switch color="primary" hide-details density="compact" label="CM カットを有効にする"
+                        v-model="profile.cm_removal" />
+                </v-card-text>
+            </v-card>
+
+            <!-- プロファイル追加ボタン -->
+            <v-btn class="mt-2" color="background-lighten-2" variant="flat" height="40px"
+                @click="addProfile()">
+                <Icon icon="fluent:add-12-filled" height="17px" />
+                <span class="ml-1">プロファイルを追加</span>
+            </v-btn>
+
             <v-btn class="settings__save-button bg-secondary mt-6" variant="flat" @click="updateServerSettings()">
                 <Icon icon="fluent:save-16-filled" class="mr-2" height="23px" />サーバー設定を更新
             </v-btn>
@@ -118,16 +128,25 @@
 </template>
 <script lang="ts" setup>
 
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 
 import Message from '@/message';
-import Settings, { IServerSettings, IServerSettingsDefault } from '@/services/Settings';
+import Settings, { IEncodingProfile, IServerSettings, IServerSettingsDefault } from '@/services/Settings';
 import useUserStore from '@/stores/UserStore';
 import Utils from '@/utils';
 import SettingsBase from '@/views/Settings/Base.vue';
 
 // フォームを小さくするかどうか
 const is_form_dense = Utils.isSmartphoneHorizontal();
+
+// エンコーダーの選択肢
+const encoderTypeItems = [
+    {title: 'FFmpeg : ソフトウェアエンコーダー', value: 'FFmpeg'},
+    {title: 'QSVEncC : Intel QSV', value: 'QSVEncC'},
+    {title: 'NVEncC : NVIDIA NVENC', value: 'NVEncC'},
+    {title: 'VCEEncC : AMD VCE', value: 'VCEEncC'},
+    {title: 'rkmppenc : Rockchip MPP', value: 'rkmppenc'},
+];
 
 // ユーザー情報を取得し、もし管理者権限であれば無効化を解除
 const is_disabled = ref(true);
@@ -146,6 +165,39 @@ Settings.fetchServerSettings().then((settings) => {
     }
 });
 
+// プロファイル名のリスト (デフォルトプロファイル選択用)
+const profileNames = computed(() => {
+    return server_settings.value.encoding.profiles.map(p => p.name);
+});
+
+// 新しいプロファイルを追加する
+function addProfile() {
+    const newProfile: IEncodingProfile = {
+        name: `プロファイル ${server_settings.value.encoding.profiles.length + 1}`,
+        encoder_type: 'FFmpeg',
+        video_codec: 'H.264',
+        quality_preset: 'medium',
+        video_bitrate: '4000k',
+        audio_bitrate: '192k',
+        cm_removal: false,
+    };
+    server_settings.value.encoding.profiles.push(newProfile);
+}
+
+// プロファイルを削除する (最低1つは残す)
+function removeProfile(index: number) {
+    if (server_settings.value.encoding.profiles.length <= 1) {
+        Message.error('プロファイルは最低1つ必要です。');
+        return;
+    }
+    const removedName = server_settings.value.encoding.profiles[index].name;
+    server_settings.value.encoding.profiles.splice(index, 1);
+    // 削除されたプロファイルがデフォルトだった場合は、最初のプロファイルをデフォルトにする
+    if (server_settings.value.encoding.default_profile_name === removedName) {
+        server_settings.value.encoding.default_profile_name = server_settings.value.encoding.profiles[0].name;
+    }
+}
+
 // サーバー設定を更新する関数
 async function updateServerSettings() {
     const result = await Settings.updateServerSettings(server_settings.value);
@@ -155,3 +207,11 @@ async function updateServerSettings() {
 }
 
 </script>
+<style lang="scss" scoped>
+
+.encoding-profile-card {
+    border-color: rgb(var(--v-theme-background-lighten-2));
+    background: rgb(var(--v-theme-background-lighten-1));
+}
+
+</style>

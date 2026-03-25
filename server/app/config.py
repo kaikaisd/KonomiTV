@@ -372,23 +372,37 @@ class _ServerSettingsRecording(BaseModel):
     # 空文字列の場合は {TITLE}_{YEAR}{MONTH}{DAY}_{HOUR}{MIN}{SEC}_{CHANNEL} 相当のデフォルト形式を使用する
     filename_format: str = ''
 
+class _EncodingProfile(BaseModel):
+    """
+    エンコードプロファイルを表す Pydantic モデル。
+    各プロファイルはエンコーダーの種別・コーデック・ビットレート・CM カット設定などを保持する。
+    Amatsukaze のエンコードプロファイルに相当する。
+    """
+    # プロファイル名 (UI 上で選択肢として表示される)
+    name: str = 'デフォルト'
+    # エンコーダーの種別
+    encoder_type: Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC', 'rkmppenc'] = 'FFmpeg'
+    # 出力映像コーデック
+    video_codec: Literal['H.264', 'H.265'] = 'H.264'
+    # エンコーダー固有のプリセット名 (例: 'medium', 'fast', 'slow')
+    quality_preset: str = 'medium'
+    # 映像ビットレート (例: '4000k')
+    video_bitrate: str = '4000k'
+    # 音声ビットレート (例: '192k')
+    audio_bitrate: str = '192k'
+    # CM 区間を除去するかどうか
+    # CM 区間が検出済みの録画ファイルでのみ有効
+    cm_removal: bool = False
+
 class _ServerSettingsEncoding(BaseModel):
     # エンコード済みファイルの出力先ディレクトリ
     # 空文字列の場合はソースファイルと同じディレクトリに出力する
     output_directory: str = ''
-    # デフォルトのエンコーダーの種別
-    default_encoder_type: Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC', 'rkmppenc'] = 'FFmpeg'
-    # デフォルトの出力映像コーデック
-    default_video_codec: Literal['H.264', 'H.265'] = 'H.264'
-    # デフォルトのエンコーダー固有のプリセット名 (例: 'medium', 'fast', 'slow')
-    default_quality_preset: str = 'medium'
-    # デフォルトの映像ビットレート (例: '4000k')
-    default_video_bitrate: str = '4000k'
-    # デフォルトの音声ビットレート (例: '192k')
-    default_audio_bitrate: str = '192k'
-    # デフォルトで CM 区間を除去するかどうか
-    # CM 区間が検出済みの録画ファイルでのみ有効
-    default_cm_removal: bool = False
+    # エンコードプロファイルのリスト
+    # ユーザーはプロファイルを追加・編集・削除でき、エンコードキュー追加時に選択できる
+    profiles: list[_EncodingProfile] = [_EncodingProfile()]
+    # デフォルトで使用するプロファイル名
+    default_profile_name: str = 'デフォルト'
 
 class ServerSettings(BaseModel):
     general: _ServerSettingsGeneral = _ServerSettingsGeneral()

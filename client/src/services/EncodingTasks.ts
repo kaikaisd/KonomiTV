@@ -48,6 +48,7 @@ export interface IEncodingTaskList {
  */
 export interface IEncodingTaskAddRequest {
     recorded_video_id: number;
+    profile_name?: string;
     encoder_type?: EncoderType;
     video_codec?: 'H.264' | 'H.265';
     quality_preset?: string;
@@ -71,14 +72,18 @@ class EncodingTasks {
     /**
      * エンコードタスクの一覧を取得する
      * @param status ステータスでフィルタ (省略時は全件取得)
+     * @param recorded_video_id RecordedVideo ID でフィルタ (省略時は全件取得)
      * @param page ページ番号
      * @param per_page 1ページあたりの件数
      * @returns エンコードタスク一覧、取得失敗時は null
      */
-    static async fetchAll(status?: EncodingTaskStatusType, page: number = 1, per_page: number = 50): Promise<IEncodingTaskList | null> {
+    static async fetchAll(status?: EncodingTaskStatusType, recorded_video_id?: number, page: number = 1, per_page: number = 50): Promise<IEncodingTaskList | null> {
         const params: Record<string, string | number> = { page, per_page };
         if (status) {
             params.status = status;
+        }
+        if (recorded_video_id !== undefined) {
+            params.recorded_video_id = recorded_video_id;
         }
         const response = await APIClient.get<IEncodingTaskList>('/encoding-tasks', { params });
 

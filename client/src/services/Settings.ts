@@ -143,13 +143,23 @@ export interface IServerSettings {
     };
     encoding: {
         output_directory: string;
-        default_encoder_type: 'FFmpeg' | 'QSVEncC' | 'NVEncC' | 'VCEEncC' | 'rkmppenc';
-        default_video_codec: 'H.264' | 'H.265';
-        default_quality_preset: string;
-        default_video_bitrate: string;
-        default_audio_bitrate: string;
-        default_cm_removal: boolean;
+        profiles: IEncodingProfile[];
+        default_profile_name: string;
     };
+}
+
+/**
+ * エンコードプロファイルのインターフェイス
+ * Amatsukaze のエンコードプロファイルに相当する
+ */
+export interface IEncodingProfile {
+    name: string;
+    encoder_type: 'FFmpeg' | 'QSVEncC' | 'NVEncC' | 'VCEEncC' | 'rkmppenc';
+    video_codec: 'H.264' | 'H.265';
+    quality_preset: string;
+    video_bitrate: string;
+    audio_bitrate: string;
+    cm_removal: boolean;
 }
 
 /* サーバー設定を表すインターフェースのデフォルト値 */
@@ -195,12 +205,16 @@ export const IServerSettingsDefault: IServerSettings = {
     },
     encoding: {
         output_directory: '',
-        default_encoder_type: 'FFmpeg',
-        default_video_codec: 'H.264',
-        default_quality_preset: 'medium',
-        default_video_bitrate: '4000k',
-        default_audio_bitrate: '192k',
-        default_cm_removal: false,
+        profiles: [{
+            name: 'デフォルト',
+            encoder_type: 'FFmpeg',
+            video_codec: 'H.264',
+            quality_preset: 'medium',
+            video_bitrate: '4000k',
+            audio_bitrate: '192k',
+            cm_removal: false,
+        }],
+        default_profile_name: 'デフォルト',
     },
 };
 
