@@ -550,6 +550,39 @@ def LoadConfig(bypass_validation: bool = False) -> ServerSettings:
     return _CONFIG
 
 
+def _convertToRuamelValue(value: Any) -> Any:
+    """
+    Python のプリミティブ値を ruamel.yaml に適した型に変換する
+    辞書は CommentedMap に、文字列は SingleQuotedScalarString に変換し、
+    それ以外の型 (int, float, bool, None) はそのまま返す
+
+    Args:
+        value (Any): 変換する値
+
+    Returns:
+        Any: ruamel.yaml に適した型に変換された値
+    """
+
+    if isinstance(value, dict):
+        # 辞書の場合は CommentedMap に変換し、各値も再帰的に変換する
+        commented_map = ruamel.yaml.CommentedMap()
+        for k, v in value.items():
+            commented_map[k] = _convertToRuamelValue(v)
+        return commented_map
+    elif isinstance(value, list):
+        # リストの場合は CommentedSeq に変換し、各要素も再帰的に変換する
+        commented_seq = ruamel.yaml.CommentedSeq()
+        for item in value:
+            commented_seq.append(_convertToRuamelValue(item))
+        return commented_seq
+    elif isinstance(value, str):
+        # 文字列の場合はシングルクォートで囲まれるように変換する
+        return ruamel.yaml.scalarstring.SingleQuotedScalarString(value)
+    else:
+        # int, float, bool, None などはそのまま返す
+        return value
+
+
 def SaveConfig(config: ServerSettings) -> None:
     """
     変更されたサーバー設定データを、コメントやフォーマットを保持した形で config.yaml に書き込む
@@ -603,14 +636,18 @@ def SaveConfig(config: ServerSettings) -> None:
                     config_raw[key][sub_key] = ruamel.yaml.CommentedSeq()
                 else:
                     config_raw[key][sub_key] = None
-            # 文字列のリストを更新する場合は clear() と extend() を使う
+            # リストを更新する場合は clear() と extend() を使う
+            # リストの各要素が辞書 (エンコードプロファイルなど) の場合は CommentedMap に変換し、
+            # 文字列の場合は SingleQuotedScalarString に変換する
             if type(config_dict[key][sub_key]) is list:
                 if type(config_raw[key][sub_key]) is ruamel.yaml.CommentedSeq:
                     config_raw[key][sub_key].clear()
                     for item in config_dict[key][sub_key]:
-                        config_raw[key][sub_key].append(ruamel.yaml.scalarstring.SingleQuotedScalarString(item))
+                        config_raw[key][sub_key].append(_convertToRuamelValue(item))
                 else:
-                    config_raw[key][sub_key] = ruamel.yaml.CommentedSeq(config_dict[key][sub_key])
+                    config_raw[key][sub_key] = ruamel.yaml.CommentedSeq(
+                        [_convertToRuamelValue(item) for item in config_dict[key][sub_key]]
+                    )
             # 文字列は明示的に SingleQuotedScalarString に変換する
             elif type(config_dict[key][sub_key]) is str:
                 config_raw[key][sub_key] = ruamel.yaml.scalarstring.SingleQuotedScalarString(config_dict[key][sub_key])
