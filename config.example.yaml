@@ -158,3 +158,26 @@ recording:
     #   {SEC}     - 放送開始秒 (2桁, 例: 00)
     #   {CHANNEL} - チャンネル名 (不明な場合は空文字列)
     filename_format: '{YEAR}年{MONTH}月{DAY}日{HOUR}時{MIN}分{SEC}秒 - {TITLE}'
+
+# =============================== エンコードの設定 ===============================
+encoding:
+
+    # エンコード後のファイルの出力先フォルダの絶対パス
+    # 空文字列の場合は、元の録画ファイルと同じフォルダに出力されます。
+    output_directory: ''
+
+    # エンコードプロファイルのリスト
+    # 各プロファイルにはエンコーダー・コーデック・ビットレート・CM カットなどの設定をまとめて保存できます。
+    # Amatsukaze のエンコードプロファイルと同様に、用途に応じて複数のプロファイルを作成できます。
+    profiles:
+        - name: 'デフォルト'
+          encoder_type: 'FFmpeg'
+          video_codec: 'H.264'
+          quality_preset: 'medium'
+          video_bitrate: '4000k'
+          audio_bitrate: '192k'
+          cm_removal: false
+
+    # エンコードキュー追加時に使用するデフォルトプロファイル名
+    # profiles 内に定義されたプロファイルの name と一致させてください。
+    default_profile_name: 'デフォルト'
