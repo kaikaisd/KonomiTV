@@ -429,11 +429,11 @@ class EncodingQueueManager:
                             f'[task_id: {task.id}, recorded_video_id: {task.recorded_video_id}]')
             return None
 
-        # CM 区間情報が未解析 (None) の場合、エンコード開始前にオンデマンドで CM 検出を実行する
-        # 録画後のバックグラウンド解析がスキップされたケース (バッチスキャンでファイルハッシュ不変) や、
-        # バックグラウンド解析がまだ完了していないケースに対応するため
-        if recorded_video.cm_sections is None:
-            logging.info(f'[EncodingQueueManager] CM sections not yet analyzed. '
+        # CM 区間情報が未解析 (None) または空リスト ([]) の場合、エンコード開始前にオンデマンドで CM 検出を実行する
+        # None: 録画後のバックグラウンド解析がスキップされたケースや、まだ完了していないケース
+        # []: 以前の解析で CM が検出されなかったが、検出ロジックの改善により再検出できる可能性があるケース
+        if recorded_video.cm_sections is None or len(recorded_video.cm_sections) == 0:
+            logging.info(f'[EncodingQueueManager] CM sections not yet analyzed or previously empty. '
                          f'Running on-demand CM detection... [task_id: {task.id}, recorded_video_id: {task.recorded_video_id}]')
             from app.metadata.CMSectionsDetector import CMSectionsDetector
             detector = CMSectionsDetector(
