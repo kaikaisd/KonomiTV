@@ -35,13 +35,16 @@ def _taskToResponse(task: EncodingTask) -> schemas.EncodingTaskResponse:
         id=task.id,
         source_file_path=task.source_file_path,
         output_file_path=task.output_file_path,
+        cm_output_file_path=task.cm_output_file_path,
         recorded_video_id=task.recorded_video_id,
         encoder_type=task.encoder_type,
+        output_format=task.output_format,
         video_codec=task.video_codec,
         quality_preset=task.quality_preset,
         video_bitrate=task.video_bitrate,
         audio_bitrate=task.audio_bitrate,
-        cm_removal=task.cm_removal,
+        cm_processing=task.cm_processing,
+        cm_video_bitrate=task.cm_video_bitrate,
         status=task.status,
         priority=task.priority,
         progress=task.progress,
@@ -128,22 +131,28 @@ async def EncodingTaskAddAPI(request: schemas.EncodingTaskAddRequest):
 
     # プロファイルの設定値をベースに、リクエストで個別に指定された値で上書きする
     encoder_type = request.encoder_type or (profile.encoder_type if profile else 'FFmpeg')
+    output_format = request.output_format or (profile.output_format if profile else 'MP4')
     video_codec = request.video_codec or (profile.video_codec if profile else 'H.264')
     quality_preset = request.quality_preset or (profile.quality_preset if profile else 'medium')
     video_bitrate = request.video_bitrate or (profile.video_bitrate if profile else '4000k')
     audio_bitrate = request.audio_bitrate or (profile.audio_bitrate if profile else '192k')
-    cm_removal = request.cm_removal if request.cm_removal is not None else (profile.cm_removal if profile else False)
+    cm_processing = request.cm_processing or (profile.cm_processing if profile else 'None')
+    # cm_video_bitrate は空文字列が「video_bitrate と同じ」の意味を持つため、
+    # None の場合のみプロファイル値にフォールバックする
+    cm_video_bitrate = request.cm_video_bitrate if request.cm_video_bitrate is not None else (profile.cm_video_bitrate if profile else '')
 
     # エンコードタスクを作成
     task = await EncodingTask.create(
         source_file_path=recorded_video.file_path,
         recorded_video_id=recorded_video.id,
         encoder_type=encoder_type,
+        output_format=output_format,
         video_codec=video_codec,
         quality_preset=quality_preset,
         video_bitrate=video_bitrate,
         audio_bitrate=audio_bitrate,
-        cm_removal=cm_removal,
+        cm_processing=cm_processing,
+        cm_video_bitrate=cm_video_bitrate,
         priority=request.priority,
         status='Pending',
     )
@@ -276,11 +285,19 @@ async def EncodingTaskDownloadAPI(
             detail='Encoded output file not found on disk.',
         )
 
+    # 出力コンテナ形式に応じた MIME タイプを返す
+    media_type_map = {
+        'MP4': 'video/mp4',
+        'MKV': 'video/x-matroska',
+        'WebM': 'video/webm',
+    }
+    media_type = media_type_map.get(task.output_format, 'application/octet-stream')
+
     logging.info(f'[EncodingTasksRouter][EncodingTaskDownloadAPI] Downloading encoded file. [task_id: {task_id}, path: {task.output_file_path}]')
     return FileResponse(
         path=output_path,
         filename=output_path.name,
-        media_type='video/mp4',
+        media_type=media_type,
     )
 
 
@@ -401,6 +418,7 @@ async def EncodingTaskRetryAPI(
     task.progress = 0.0
     task.fail_reason = ''
     task.output_file_path = ''
+    task.cm_output_file_path = ''
     task.encoding_started_at = None
     task.encoding_finished_at = None
     await task.save()

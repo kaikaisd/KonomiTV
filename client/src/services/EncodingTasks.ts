@@ -8,6 +8,16 @@ import APIClient from '@/services/APIClient';
 export type EncoderType = 'FFmpeg' | 'QSVEncC' | 'NVEncC' | 'VCEEncC' | 'rkmppenc';
 
 /**
+ * 出力コンテナ形式
+ */
+export type OutputFormatType = 'MP4' | 'MKV' | 'WebM';
+
+/**
+ * CM 処理モード
+ */
+export type CMProcessingType = 'None' | 'Remove' | 'SeparateOutput';
+
+/**
  * エンコードタスクのステータス
  */
 export type EncodingTaskStatusType = 'Pending' | 'Encoding' | 'Completed' | 'Failed' | 'Cancelled';
@@ -19,13 +29,16 @@ export interface IEncodingTask {
     id: number;
     source_file_path: string;
     output_file_path: string;
+    cm_output_file_path: string;
     recorded_video_id: number | null;
     encoder_type: EncoderType;
+    output_format: OutputFormatType;
     video_codec: 'H.264' | 'H.265';
     quality_preset: string;
     video_bitrate: string;
     audio_bitrate: string;
-    cm_removal: boolean;
+    cm_processing: CMProcessingType;
+    cm_video_bitrate: string;
     status: EncodingTaskStatusType;
     priority: number;
     progress: number;
@@ -50,11 +63,13 @@ export interface IEncodingTaskAddRequest {
     recorded_video_id: number;
     profile_name?: string;
     encoder_type?: EncoderType;
+    output_format?: OutputFormatType;
     video_codec?: 'H.264' | 'H.265';
     quality_preset?: string;
     video_bitrate?: string;
     audio_bitrate?: string;
-    cm_removal?: boolean;
+    cm_processing?: CMProcessingType;
+    cm_video_bitrate?: string;
     priority?: number;
 }
 

@@ -84,6 +84,13 @@
                             :items="encoderTypeItems"
                             v-model="profile.encoder_type" />
                     </div>
+                    <!-- 出力コンテナ形式 -->
+                    <div class="mb-3">
+                        <v-select color="primary" variant="outlined" hide-details density="compact"
+                            label="出力コンテナ形式"
+                            :items="outputFormatItems"
+                            v-model="profile.output_format" />
+                    </div>
                     <!-- 映像コーデック -->
                     <div class="mb-3">
                         <v-select color="primary" variant="outlined" hide-details density="compact"
@@ -107,9 +114,19 @@
                             label="音声ビットレート" placeholder="192k"
                             v-model="profile.audio_bitrate" style="flex: 1;" />
                     </div>
-                    <!-- CM カット -->
-                    <v-switch color="primary" hide-details density="compact" label="CM カットを有効にする"
-                        v-model="profile.cm_removal" />
+                    <!-- CM 処理モード -->
+                    <div class="mb-3">
+                        <v-select color="primary" variant="outlined" hide-details density="compact"
+                            label="CM 処理モード"
+                            :items="cmProcessingItems"
+                            v-model="profile.cm_processing" />
+                    </div>
+                    <!-- CM 映像ビットレート (SeparateOutput 時のみ表示) -->
+                    <div v-if="profile.cm_processing === 'SeparateOutput'" class="mb-3">
+                        <v-text-field color="primary" variant="outlined" hide-details density="compact"
+                            label="CM 映像ビットレート" placeholder="空欄の場合は映像ビットレートと同じ"
+                            v-model="profile.cm_video_bitrate" />
+                    </div>
                 </v-card-text>
             </v-card>
 
@@ -148,6 +165,20 @@ const encoderTypeItems = [
     {title: 'rkmppenc : Rockchip MPP', value: 'rkmppenc'},
 ];
 
+// 出力コンテナ形式の選択肢
+const outputFormatItems = [
+    {title: 'MP4 : 汎用性が最も高い', value: 'MP4'},
+    {title: 'MKV : 多コーデック対応・障害耐性が高い', value: 'MKV'},
+    {title: 'WebM : Web ブラウザ向け (VP9/AV1)', value: 'WebM'},
+];
+
+// CM 処理モードの選択肢
+const cmProcessingItems = [
+    {title: 'なし : CM 区間をそのままエンコード', value: 'None'},
+    {title: '除去 : CM 区間を除去して本編のみ出力', value: 'Remove'},
+    {title: '分離出力 : CM と本編を別ファイルに出力', value: 'SeparateOutput'},
+];
+
 // ユーザー情報を取得し、もし管理者権限であれば無効化を解除
 const is_disabled = ref(true);
 const user_store = useUserStore();
@@ -175,11 +206,13 @@ function addProfile() {
     const newProfile: IEncodingProfile = {
         name: `プロファイル ${server_settings.value.encoding.profiles.length + 1}`,
         encoder_type: 'FFmpeg',
+        output_format: 'MP4',
         video_codec: 'H.264',
         quality_preset: 'medium',
         video_bitrate: '4000k',
         audio_bitrate: '192k',
-        cm_removal: false,
+        cm_processing: 'None',
+        cm_video_bitrate: '',
     };
     server_settings.value.encoding.profiles.push(newProfile);
 }

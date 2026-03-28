@@ -196,9 +196,13 @@
                         <span class="text-caption">音声ビットレート</span>
                         <span class="text-caption font-weight-bold">{{ selected_profile.audio_bitrate }}</span>
                     </div>
+                    <div class="d-flex justify-space-between mb-1">
+                        <span class="text-caption">出力形式</span>
+                        <span class="text-caption font-weight-bold">{{ selected_profile.output_format }}</span>
+                    </div>
                     <div class="d-flex justify-space-between">
-                        <span class="text-caption">CM カット</span>
-                        <span class="text-caption font-weight-bold">{{ selected_profile.cm_removal ? '有効' : '無効' }}</span>
+                        <span class="text-caption">CM 処理</span>
+                        <span class="text-caption font-weight-bold">{{ getCMProcessingLabel(selected_profile.cm_processing) }}</span>
                     </div>
                 </div>
                 <div class="text-caption text-medium-emphasis">
@@ -316,6 +320,16 @@ const selected_profile = computed(() => encoding_profiles.value.find(p => p.name
 
 // プロファイル変更時のコールバック (特にロジックは不要だが、将来の拡張用に定義)
 const onProfileChanged = () => {};
+
+// CM 処理モードの日本語ラベルを返す
+const getCMProcessingLabel = (mode: string): string => {
+    switch (mode) {
+        case 'None': return 'なし';
+        case 'Remove': return 'CM 除去';
+        case 'SeparateOutput': return '分離出力';
+        default: return mode;
+    }
+};
 
 // サーバー設定からエンコードプロファイル一覧を取得して反映
 Settings.fetchServerSettings().then((settings) => {

@@ -172,11 +172,15 @@ encoding:
     profiles:
         - name: 'デフォルト'
           encoder_type: 'FFmpeg'
+          output_format: 'MP4'
           video_codec: 'H.264'
           quality_preset: 'medium'
           video_bitrate: '4000k'
           audio_bitrate: '192k'
-          cm_removal: false
+          # CM 処理モード: None (そのまま), Remove (除去), SeparateOutput (分離出力)
+          cm_processing: 'None'
+          # CM 映像ビットレート (SeparateOutput 時に CM ファイルに適用、空欄なら映像ビットレートと同じ)
+          cm_video_bitrate: ''
 
     # エンコードキュー追加時に使用するデフォルトプロファイル名
     # profiles 内に定義されたプロファイルの name と一致させてください。

@@ -33,6 +33,7 @@
                                     <v-chip color="blue" size="small" variant="flat">Encoding</v-chip>
                                     <v-chip size="small" variant="tonal">{{ encodingTask.encoder_type }}</v-chip>
                                     <v-chip size="small" variant="tonal">{{ encodingTask.video_codec }}</v-chip>
+                                    <v-chip size="small" variant="tonal">{{ encodingTask.output_format }}</v-chip>
                                 </div>
                                 <div class="encoding-container__current-file">
                                     {{ getFileName(encodingTask.source_file_path) }}

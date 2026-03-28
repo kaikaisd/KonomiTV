@@ -155,11 +155,13 @@ export interface IServerSettings {
 export interface IEncodingProfile {
     name: string;
     encoder_type: 'FFmpeg' | 'QSVEncC' | 'NVEncC' | 'VCEEncC' | 'rkmppenc';
+    output_format: 'MP4' | 'MKV' | 'WebM';
     video_codec: 'H.264' | 'H.265';
     quality_preset: string;
     video_bitrate: string;
     audio_bitrate: string;
-    cm_removal: boolean;
+    cm_processing: 'None' | 'Remove' | 'SeparateOutput';
+    cm_video_bitrate: string;
 }
 
 /* サーバー設定を表すインターフェースのデフォルト値 */
@@ -208,11 +210,13 @@ export const IServerSettingsDefault: IServerSettings = {
         profiles: [{
             name: 'デフォルト',
             encoder_type: 'FFmpeg',
+            output_format: 'MP4',
             video_codec: 'H.264',
             quality_preset: 'medium',
             video_bitrate: '4000k',
             audio_bitrate: '192k',
-            cm_removal: false,
+            cm_processing: 'None',
+            cm_video_bitrate: '',
         }],
         default_profile_name: 'デフォルト',
     },

@@ -382,6 +382,11 @@ class _EncodingProfile(BaseModel):
     name: str = 'デフォルト'
     # エンコーダーの種別
     encoder_type: Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC', 'rkmppenc'] = 'FFmpeg'
+    # 出力コンテナ形式
+    # MP4: 汎用性が最も高い (moov atom を先頭に配置してストリーミング再生対応)
+    # MKV: 多くのコーデックと字幕トラックに対応、障害耐性が高い
+    # WebM: Web ブラウザでのネイティブ再生向け (VP9/AV1 + Opus)
+    output_format: Literal['MP4', 'MKV', 'WebM'] = 'MP4'
     # 出力映像コーデック
     video_codec: Literal['H.264', 'H.265'] = 'H.264'
     # エンコーダー固有のプリセット名 (例: 'medium', 'fast', 'slow')
@@ -390,9 +395,14 @@ class _EncodingProfile(BaseModel):
     video_bitrate: str = '4000k'
     # 音声ビットレート (例: '192k')
     audio_bitrate: str = '192k'
-    # CM 区間を除去するかどうか
-    # CM 区間が検出済みの録画ファイルでのみ有効
-    cm_removal: bool = False
+    # CM 区間の処理モード
+    # None: CM 区間をそのままエンコードする (CM 除去なし)
+    # Remove: CM 区間を除去して本編のみ出力する
+    # SeparateOutput: CM と本編を別々のファイルに分離出力する
+    cm_processing: Literal['None', 'Remove', 'SeparateOutput'] = 'None'
+    # CM 区間に適用する映像ビットレート (SeparateOutput 時に CM ファイルに適用)
+    # 空文字列の場合は映像ビットレート (video_bitrate) と同じ値が使われる
+    cm_video_bitrate: str = ''
 
 class _ServerSettingsEncoding(BaseModel):
     # エンコード済みファイルの出力先ディレクトリ

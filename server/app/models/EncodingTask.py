@@ -35,6 +35,8 @@ class EncodingTask(TortoiseModel):
     source_file_path = fields.TextField()
     # エンコード後の出力ファイルパス (エンコード開始時に EncodingQueueManager が設定する)
     output_file_path = fields.TextField(default='')
+    # CM 分離出力時の CM ファイルパス (SeparateOutput 時のみ使用)
+    cm_output_file_path = fields.TextField(default='')
 
     # 録画番組 (RecordedVideo) との関連 (任意: 録画番組が削除されてもタスクレコードは残す)
     recorded_video: fields.ForeignKeyNullableRelation[RecordedVideo] = \
@@ -48,6 +50,11 @@ class EncodingTask(TortoiseModel):
         TortoiseField[Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC', 'rkmppenc']],
         fields.CharField(20, default='FFmpeg'),
     )
+    # 出力コンテナ形式
+    output_format = cast(
+        TortoiseField[Literal['MP4', 'MKV', 'WebM']],
+        fields.CharField(10, default='MP4'),
+    )
     # 出力映像コーデック
     video_codec = cast(
         TortoiseField[Literal['H.264', 'H.265']],
@@ -60,8 +67,17 @@ class EncodingTask(TortoiseModel):
     # 音声ビットレート (例: '192k')
     audio_bitrate = fields.CharField(50, default='192k')
 
-    # CM 区間を除去するかどうか (検出済みの CM 区間情報を利用して、CM 部分をカットしてエンコードする)
-    cm_removal = fields.BooleanField(default=False)
+    # CM 処理モード
+    # None: CM 区間をそのままエンコードする (CM 除去なし)
+    # Remove: CM 区間を除去して本編のみ出力する
+    # SeparateOutput: CM と本編を別々のファイルに分離出力する
+    cm_processing = cast(
+        TortoiseField[Literal['None', 'Remove', 'SeparateOutput']],
+        fields.CharField(20, default='None'),
+    )
+    # CM 区間に適用する映像ビットレート (SeparateOutput 時に CM ファイルに適用)
+    # 空文字列の場合は video_bitrate と同じ値が使われる
+    cm_video_bitrate = fields.CharField(50, default='')
 
     # ***** 状態管理 *****
 

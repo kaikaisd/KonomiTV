@@ -172,21 +172,33 @@ class EncodingQueueManager:
 
         # 出力ファイルパスを決定する
         # サーバー設定で出力ディレクトリが指定されている場合はそこに出力し、
-        # 指定されていない場合はソースファイルと同じディレクトリに .mp4 拡張子で出力する
+        # 指定されていない場合はソースファイルと同じディレクトリに出力する
+        # 拡張子は出力コンテナ形式に応じて決定する
+        output_ext_map = {'MP4': '.mp4', 'MKV': '.mkv', 'WebM': '.webm'}
+        output_ext = output_ext_map.get(task.output_format, '.mp4')
         encoding_config = Config().encoding
         if encoding_config.output_directory and Path(encoding_config.output_directory).is_dir():
             output_dir = Path(encoding_config.output_directory)
-            output_path = output_dir / f'{source_path.stem}.mp4'
+            output_path = output_dir / f'{source_path.stem}{output_ext}'
         else:
-            output_path = source_path.with_suffix('.mp4')
+            output_path = source_path.with_suffix(output_ext)
         # 出力ファイルが既に存在する場合は連番を付ける
         base_stem = output_path.stem
         output_dir_for_counter = output_path.parent
         counter = 1
         while output_path.exists():
-            output_path = output_dir_for_counter / f'{base_stem}_{counter}.mp4'
+            output_path = output_dir_for_counter / f'{base_stem}_{counter}{output_ext}'
             counter += 1
         task.output_file_path = str(output_path)
+
+        # CM 分離出力時の CM ファイルパスを決定する
+        if task.cm_processing == 'SeparateOutput':
+            cm_path = output_path.parent / f'{output_path.stem}_CM{output_ext}'
+            cm_counter = 1
+            while cm_path.exists():
+                cm_path = output_path.parent / f'{output_path.stem}_CM_{cm_counter}{output_ext}'
+                cm_counter += 1
+            task.cm_output_file_path = str(cm_path)
 
         # ステータスを Encoding に更新
         task.status = 'Encoding'
@@ -253,6 +265,8 @@ class EncodingQueueManager:
                 # 中途半端な出力ファイルを削除
                 if Path(task.output_file_path).exists():
                     Path(task.output_file_path).unlink()
+                if task.cm_output_file_path and Path(task.cm_output_file_path).exists():
+                    Path(task.cm_output_file_path).unlink()
                 logging.info(f'[EncodingQueueManager] Encoding cancelled. [task_id: {task.id}]')
 
             elif return_code == 0:
@@ -272,6 +286,8 @@ class EncodingQueueManager:
                 # 中途半端な出力ファイルを削除
                 if Path(task.output_file_path).exists():
                     Path(task.output_file_path).unlink()
+                if task.cm_output_file_path and Path(task.cm_output_file_path).exists():
+                    Path(task.cm_output_file_path).unlink()
                 logging.error(f'[EncodingQueueManager] Encoding failed. [task_id: {task.id}, return_code: {return_code}]')
 
         except Exception as ex:
@@ -283,6 +299,8 @@ class EncodingQueueManager:
             # 中途半端な出力ファイルを削除
             if task.output_file_path and Path(task.output_file_path).exists():
                 Path(task.output_file_path).unlink()
+            if task.cm_output_file_path and Path(task.cm_output_file_path).exists():
+                Path(task.cm_output_file_path).unlink()
             logging.error(f'[EncodingQueueManager] Encoding task failed with exception. [task_id: {task.id}]', exc_info=True)
 
         finally:
@@ -294,15 +312,15 @@ class EncodingQueueManager:
     async def _getCMSections(self, task: EncodingTask) -> list[schemas.CMSection] | None:
         """
         エンコードタスクに紐づく RecordedVideo から CM 区間情報を取得する。
-        CM 除去が有効で、かつ CM 区間が検出済みの場合のみ区間リストを返す。
+        CM 処理が有効 (Remove または SeparateOutput) で、かつ CM 区間が検出済みの場合のみ区間リストを返す。
 
         Args:
             task (EncodingTask): エンコードタスク
 
         Returns:
-            list[schemas.CMSection] | None: CM 区間リスト。CM 除去が無効または未検出の場合は None
+            list[schemas.CMSection] | None: CM 区間リスト。CM 処理が無効または未検出の場合は None
         """
-        if not task.cm_removal or task.recorded_video_id is None:
+        if task.cm_processing == 'None' or task.recorded_video_id is None:
             return None
 
         recorded_video = await RecordedVideo.get_or_none(id=task.recorded_video_id)
@@ -481,8 +499,14 @@ class EncodingQueueManager:
         # 音声コーデック
         options.extend(['-acodec', 'aac', '-ac', '2', '-ab', task.audio_bitrate, '-ar', '48000'])
 
-        # 出力形式: MP4 (moov atom を先頭に配置してストリーミング再生を可能にする)
-        options.extend(['-movflags', '+faststart'])
+        # 出力形式に応じたオプション
+        if task.output_format == 'MKV':
+            options.extend(['-f', 'matroska'])
+        elif task.output_format == 'WebM':
+            options.extend(['-f', 'webm'])
+        else:
+            # MP4: moov atom を先頭に配置してストリーミング再生を可能にする
+            options.extend(['-movflags', '+faststart'])
         options.extend(['-y', task.output_file_path])
 
         return options
@@ -557,8 +581,10 @@ class EncodingQueueManager:
         # インターレース解除
         options.extend(['--interlace', 'tff', '--vpp-deinterlace', 'normal'])
 
-        # 出力: MP4 形式
-        options.extend(['--output-format', 'mp4', '-o', task.output_file_path])
+        # 出力形式に応じたフォーマット指定
+        hwenc_format_map = {'MP4': 'mp4', 'MKV': 'matroska', 'WebM': 'webm'}
+        hwenc_format = hwenc_format_map.get(task.output_format, 'mp4')
+        options.extend(['--output-format', hwenc_format, '-o', task.output_file_path])
 
         return options
 
