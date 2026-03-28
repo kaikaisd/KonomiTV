@@ -28,6 +28,7 @@ from app.routers import (
     CapturesRouter,
     ChannelsRouter,
     DataBroadcastingRouter,
+    EncodingTasksRouter,
     LiveStreamsRouter,
     MaintenanceRouter,
     NiconicoRouter,
@@ -78,6 +79,7 @@ app.include_router(ReservationsRouter.router)
 app.include_router(ReservationConditionsRouter.router)
 app.include_router(RecordingPresetsRouter.router)
 app.include_router(CapturesRouter.router)
+app.include_router(EncodingTasksRouter.router)
 app.include_router(DataBroadcastingRouter.router)
 app.include_router(NiconicoRouter.router)
 app.include_router(TwitterRouter.router)
@@ -256,6 +258,10 @@ async def Startup():
         await mirakurun_recording_task.start()
         mirakurun_rule_match_task = MirakurunRuleMatchTask()
         await mirakurun_rule_match_task.start()
+
+    # バッチエンコードキューマネージャーを起動する
+    from app.encoding.EncodingQueueManager import EncodingQueueManager
+    EncodingQueueManager.start()
 
 # サーバー設定で指定された時間 (デフォルト: 15分) ごとに1回、チャンネル情報と番組情報を更新する
 # チャンネル情報は頻繁に変わるわけではないけど、手動で再起動しなくても自動で変更が適用されてほしい

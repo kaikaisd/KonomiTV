@@ -22,6 +22,7 @@ from app.metadata.MetadataAnalyzer import MetadataAnalyzer
 from app.metadata.ThumbnailGenerator import ThumbnailGenerator
 from app.metadata.TitleParser import TitleParser, TitleParseResult
 from app.models.Channel import Channel
+from app.models.EncodingTask import EncodingTask
 from app.models.RecordedProgram import RecordedProgram
 from app.models.RecordedVideo import RecordedVideo
 from app.models.Series import Series
@@ -332,6 +333,17 @@ class RecordedScanTask:
             if type(pattern) is str and pattern.strip() != ''
         ]
 
+        # エンコードタスクの出力ファイルパスを取得し、スキャン対象から除外する
+        # エンコード済みファイルが新しい録画番組として二重に登録されることを防ぐ
+        encoding_output_paths: set[str] = set()
+        encoding_tasks = await EncodingTask.filter(
+            status__in=['Completed', 'Encoding', 'Pending'],
+            output_file_path__not='',
+        ).values_list('output_file_path', flat=True)
+        for output_path in encoding_tasks:
+            if output_path:
+                encoding_output_paths.add(str(output_path))
+
         # 各録画フォルダをスキャン
         logging.info('Scanning recorded folders...')
         processed_canonical_paths: set[str] = set()
@@ -360,6 +372,10 @@ class RecordedScanTask:
                         continue
                     # 対象拡張子のファイル以外をスキップ
                     if canonical_path.suffix.lower() not in self.SCAN_TARGET_EXTENSIONS:
+                        continue
+                    # エンコードタスクの出力ファイルをスキップ
+                    # エンコード済みファイルが新しい録画番組として二重に登録されることを防ぐ
+                    if canonical_path_str in encoding_output_paths:
                         continue
                     # 録画ファイルが確実に存在することを確認する
                     ## 環境次第では、稀に glob で取得したファイルが既に存在しなくなっているケースがある

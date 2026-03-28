@@ -82,6 +82,11 @@ const router = createRouter({
             component: () => import('@/views/Reservations/ReservationConditions.vue'),
         },
         {
+            path: '/encoding/',
+            name: 'Encoding',
+            component: () => import('@/views/Encoding/Home.vue'),
+        },
+        {
             path: '/captures/',
             name: 'Captures',
             component: () => import('@/views/Captures.vue'),
@@ -174,6 +179,11 @@ const router = createRouter({
             path: '/settings/server',
             name: 'Settings Server',
             component: () => import('@/views/Settings/Server.vue'),
+        },
+        {
+            path: '/settings/encoding',
+            name: 'Settings Encoding',
+            component: () => import('@/views/Settings/Encoding.vue'),
         },
         {
             path: '/login/',

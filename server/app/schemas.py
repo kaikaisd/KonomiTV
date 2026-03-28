@@ -788,3 +788,102 @@ class VersionInformation(BaseModel):
     environment: Literal['Windows', 'Linux', 'Linux-Docker', 'Linux-ARM']
     backend: Literal['EDCB', 'Mirakurun']
     encoder: Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC', 'rkmppenc']
+
+# ***** エンコードキュー *****
+
+# エンコーダーの種別の型定義
+EncoderType = Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC', 'rkmppenc']
+
+# 出力コンテナ形式の型定義
+OutputFormatType = Literal['MP4', 'MKV', 'WebM']
+
+# CM 処理モードの型定義
+CMProcessingType = Literal['None', 'Remove', 'SeparateOutput']
+
+# エンコードタスクのステータスの型定義
+EncodingTaskStatusType = Literal['Pending', 'Encoding', 'Completed', 'Failed', 'Cancelled']
+
+class EncodingTaskResponse(BaseModel):
+    """エンコードタスクの状態を表すレスポンススキーマ"""
+    # タスク ID
+    id: int
+    # エンコード元の録画 TS ファイルパス
+    source_file_path: str
+    # エンコード後の出力ファイルパス (本編)
+    output_file_path: str
+    # CM 分離出力時の CM ファイルパス (SeparateOutput 時のみ使用)
+    cm_output_file_path: str
+    # 関連する RecordedVideo の ID (null 許容)
+    recorded_video_id: int | None
+    # 使用するエンコーダーの種別
+    encoder_type: EncoderType
+    # 出力コンテナ形式
+    output_format: OutputFormatType
+    # 出力映像コーデック
+    video_codec: Literal['H.264', 'H.265']
+    # エンコーダー固有のプリセット名
+    quality_preset: str
+    # 映像ビットレート
+    video_bitrate: str
+    # 音声ビットレート
+    audio_bitrate: str
+    # CM 処理モード
+    cm_processing: CMProcessingType
+    # CM 区間に適用する映像ビットレート (SeparateOutput 時に使用)
+    cm_video_bitrate: str
+    # エンコードタスクのステータス
+    status: EncodingTaskStatusType
+    # タスクの優先度
+    priority: int
+    # エンコード進捗率 (0.0 ~ 100.0)
+    progress: float
+    # 失敗時のエラーメッセージ
+    fail_reason: str
+    # タスクがキューに追加された日時
+    added_at: datetime
+    # エンコードが開始された日時
+    encoding_started_at: datetime | None
+    # エンコードが完了/失敗した日時
+    encoding_finished_at: datetime | None
+
+class EncodingTaskListResponse(BaseModel):
+    """エンコードタスク一覧のレスポンススキーマ"""
+    total: int
+    encoding_tasks: list[EncodingTaskResponse]
+
+class EncodingTaskAddRequest(BaseModel):
+    """
+    エンコードタスク追加のリクエストスキーマ。
+    profile_name が指定された場合はサーバー設定のエンコードプロファイルから設定値を読み込む。
+    個別のパラメータが指定された場合はプロファイルの値を上書きする。
+    """
+    # エンコード対象の RecordedVideo の ID
+    recorded_video_id: int
+    # 使用するエンコードプロファイル名 (サーバー設定で定義されたプロファイルから選択)
+    # 省略時はサーバー設定のデフォルトプロファイルが使用される
+    profile_name: Annotated[str | None, Field(default=None)]
+    # 使用するエンコーダーの種別 (プロファイルの値を上書きする場合に指定)
+    encoder_type: Annotated[EncoderType | None, Field(default=None)]
+    # 出力コンテナ形式 (プロファイルの値を上書きする場合に指定)
+    output_format: Annotated[OutputFormatType | None, Field(default=None)]
+    # 出力映像コーデック (プロファイルの値を上書きする場合に指定)
+    video_codec: Annotated[Literal['H.264', 'H.265'] | None, Field(default=None)]
+    # エンコーダー固有のプリセット名 (プロファイルの値を上書きする場合に指定)
+    quality_preset: Annotated[str | None, Field(default=None)]
+    # 映像ビットレート (プロファイルの値を上書きする場合に指定)
+    video_bitrate: Annotated[str | None, Field(default=None)]
+    # 音声ビットレート (プロファイルの値を上書きする場合に指定)
+    audio_bitrate: Annotated[str | None, Field(default=None)]
+    # CM 処理モード (プロファイルの値を上書きする場合に指定)
+    cm_processing: Annotated[CMProcessingType | None, Field(default=None)]
+    # CM 区間に適用する映像ビットレート (プロファイルの値を上書きする場合に指定)
+    cm_video_bitrate: Annotated[str | None, Field(default=None)]
+    # タスクの優先度
+    priority: Annotated[int, Field(default=0)]
+
+class EncodingTaskUpdateRequest(BaseModel):
+    """エンコードタスク更新のリクエストスキーマ"""
+    # タスクの優先度 (変更する場合のみ指定)
+    priority: int | None = None
+    # ステータス変更 (キャンセルのみ許可)
+    status: Literal['Cancelled'] | None = None

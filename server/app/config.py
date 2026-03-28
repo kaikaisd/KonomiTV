@@ -372,6 +372,48 @@ class _ServerSettingsRecording(BaseModel):
     # 空文字列の場合は {TITLE}_{YEAR}{MONTH}{DAY}_{HOUR}{MIN}{SEC}_{CHANNEL} 相当のデフォルト形式を使用する
     filename_format: str = ''
 
+class _EncodingProfile(BaseModel):
+    """
+    エンコードプロファイルを表す Pydantic モデル。
+    各プロファイルはエンコーダーの種別・コーデック・ビットレート・CM カット設定などを保持する。
+    Amatsukaze のエンコードプロファイルに相当する。
+    """
+    # プロファイル名 (UI 上で選択肢として表示される)
+    name: str = 'デフォルト'
+    # エンコーダーの種別
+    encoder_type: Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC', 'rkmppenc'] = 'FFmpeg'
+    # 出力コンテナ形式
+    # MP4: 汎用性が最も高い (moov atom を先頭に配置してストリーミング再生対応)
+    # MKV: 多くのコーデックと字幕トラックに対応、障害耐性が高い
+    # WebM: Web ブラウザでのネイティブ再生向け (VP9/AV1 + Opus)
+    output_format: Literal['MP4', 'MKV', 'WebM'] = 'MP4'
+    # 出力映像コーデック
+    video_codec: Literal['H.264', 'H.265'] = 'H.264'
+    # エンコーダー固有のプリセット名 (例: 'medium', 'fast', 'slow')
+    quality_preset: str = 'medium'
+    # 映像ビットレート (例: '4000k')
+    video_bitrate: str = '4000k'
+    # 音声ビットレート (例: '192k')
+    audio_bitrate: str = '192k'
+    # CM 区間の処理モード
+    # None: CM 区間をそのままエンコードする (CM 除去なし)
+    # Remove: CM 区間を除去して本編のみ出力する
+    # SeparateOutput: CM と本編を別々のファイルに分離出力する
+    cm_processing: Literal['None', 'Remove', 'SeparateOutput'] = 'None'
+    # CM 区間に適用する映像ビットレート (SeparateOutput 時に CM ファイルに適用)
+    # 空文字列の場合は映像ビットレート (video_bitrate) と同じ値が使われる
+    cm_video_bitrate: str = ''
+
+class _ServerSettingsEncoding(BaseModel):
+    # エンコード済みファイルの出力先ディレクトリ
+    # 空文字列の場合はソースファイルと同じディレクトリに出力する
+    output_directory: str = ''
+    # エンコードプロファイルのリスト
+    # ユーザーはプロファイルを追加・編集・削除でき、エンコードキュー追加時に選択できる
+    profiles: list[_EncodingProfile] = [_EncodingProfile()]
+    # デフォルトで使用するプロファイル名
+    default_profile_name: str = 'デフォルト'
+
 class ServerSettings(BaseModel):
     general: _ServerSettingsGeneral = _ServerSettingsGeneral()
     server: _ServerSettingsServer = _ServerSettingsServer()
@@ -380,6 +422,7 @@ class ServerSettings(BaseModel):
     capture: _ServerSettingsCapture = _ServerSettingsCapture()
     notification: _ServerSettingsNotification = _ServerSettingsNotification()
     recording: _ServerSettingsRecording = _ServerSettingsRecording()
+    encoding: _ServerSettingsEncoding = _ServerSettingsEncoding()
 
 
 # サーバー設定データと読み込み・保存用の関数
@@ -517,6 +560,39 @@ def LoadConfig(bypass_validation: bool = False) -> ServerSettings:
     return _CONFIG
 
 
+def _convertToRuamelValue(value: Any) -> Any:
+    """
+    Python のプリミティブ値を ruamel.yaml に適した型に変換する
+    辞書は CommentedMap に、文字列は SingleQuotedScalarString に変換し、
+    それ以外の型 (int, float, bool, None) はそのまま返す
+
+    Args:
+        value (Any): 変換する値
+
+    Returns:
+        Any: ruamel.yaml に適した型に変換された値
+    """
+
+    if isinstance(value, dict):
+        # 辞書の場合は CommentedMap に変換し、各値も再帰的に変換する
+        commented_map = ruamel.yaml.CommentedMap()
+        for k, v in value.items():
+            commented_map[k] = _convertToRuamelValue(v)
+        return commented_map
+    elif isinstance(value, list):
+        # リストの場合は CommentedSeq に変換し、各要素も再帰的に変換する
+        commented_seq = ruamel.yaml.CommentedSeq()
+        for item in value:
+            commented_seq.append(_convertToRuamelValue(item))
+        return commented_seq
+    elif isinstance(value, str):
+        # 文字列の場合はシングルクォートで囲まれるように変換する
+        return ruamel.yaml.scalarstring.SingleQuotedScalarString(value)
+    else:
+        # int, float, bool, None などはそのまま返す
+        return value
+
+
 def SaveConfig(config: ServerSettings) -> None:
     """
     変更されたサーバー設定データを、コメントやフォーマットを保持した形で config.yaml に書き込む
@@ -549,7 +625,12 @@ def SaveConfig(config: ServerSettings) -> None:
     yaml.default_flow_style = None  # None を使うと、スカラー以外のものはブロックスタイルになる
     yaml.preserve_quotes = True
     yaml.width = 20
-    yaml.indent(mapping=4, sequence=4, offset=4)
+    # mapping=4: 辞書キーのインデント幅 (encoding: → output_directory: など)
+    # sequence=6: シーケンス要素のコンテンツインデント幅 (profiles: → name: のインデント量)
+    # offset=4: シーケンスのダッシュ "-" のオフセット (profiles: から "-" までのスペース数)
+    # sequence=offset=4 だと "- " の2文字分により後続キーとの位置が合わず過剰なインデントになるため、
+    # sequence=offset+2=6 とすることで "- " 直後のキーと後続行のキーの位置が一致する
+    yaml.indent(mapping=4, sequence=6, offset=4)
     try:
         with open(_CONFIG_YAML_PATH, encoding='utf-8') as file:
             config_raw = yaml.load(file)
@@ -570,14 +651,18 @@ def SaveConfig(config: ServerSettings) -> None:
                     config_raw[key][sub_key] = ruamel.yaml.CommentedSeq()
                 else:
                     config_raw[key][sub_key] = None
-            # 文字列のリストを更新する場合は clear() と extend() を使う
+            # リストを更新する場合は clear() と extend() を使う
+            # リストの各要素が辞書 (エンコードプロファイルなど) の場合は CommentedMap に変換し、
+            # 文字列の場合は SingleQuotedScalarString に変換する
             if type(config_dict[key][sub_key]) is list:
                 if type(config_raw[key][sub_key]) is ruamel.yaml.CommentedSeq:
                     config_raw[key][sub_key].clear()
                     for item in config_dict[key][sub_key]:
-                        config_raw[key][sub_key].append(ruamel.yaml.scalarstring.SingleQuotedScalarString(item))
+                        config_raw[key][sub_key].append(_convertToRuamelValue(item))
                 else:
-                    config_raw[key][sub_key] = ruamel.yaml.CommentedSeq(config_dict[key][sub_key])
+                    config_raw[key][sub_key] = ruamel.yaml.CommentedSeq(
+                        [_convertToRuamelValue(item) for item in config_dict[key][sub_key]]
+                    )
             # 文字列は明示的に SingleQuotedScalarString に変換する
             elif type(config_dict[key][sub_key]) is str:
                 config_raw[key][sub_key] = ruamel.yaml.scalarstring.SingleQuotedScalarString(config_dict[key][sub_key])

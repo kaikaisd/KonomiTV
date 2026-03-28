@@ -26,6 +26,16 @@
                 <div v-else-if="program.is_partially_recorded" class="recorded-program__thumbnail-status recorded-program__thumbnail-status--partial">
                     ⚠️ 一部のみ録画
                 </div>
+                <!-- エンコード済みバッジ (completed_encoding_task が存在する場合に表示) -->
+                <div v-if="completed_encoding_task !== null" class="recorded-program__thumbnail-status recorded-program__thumbnail-status--encoded">
+                    <Icon icon="fluent:checkmark-circle-12-regular" width="15px" height="15px" />
+                    エンコード済み
+                </div>
+                <!-- エンコード中バッジ (encoding_encoding_task が存在する場合に表示) -->
+                <div v-else-if="active_encoding_task !== null" class="recorded-program__thumbnail-status recorded-program__thumbnail-status--encoding">
+                    <Icon icon="fluent:arrow-sync-circle-16-regular" width="15px" height="15px" />
+                    エンコード中
+                </div>
                 <div v-if="watchHistory" class="recorded-program__thumbnail-progress">
                     <div class="recorded-program__thumbnail-progress-bar"
                         :style="`width: ${(watchHistory.last_playback_position / program.recorded_video.duration) * 100}%`">
@@ -103,6 +113,14 @@
                             </template>
                             <v-list-item-title class="ml-3">録画ファイルをダウンロード ({{ Utils.formatBytes(program.recorded_video.file_size) }})</v-list-item-title>
                         </v-list-item>
+                        <v-list-item v-if="completed_encoding_task !== null"
+                            @click="downloadEncodedVideo"
+                            v-ftooltip="completed_encoding_task.output_file_path">
+                            <template v-slot:prepend>
+                                <Icon icon="fluent:arrow-download-24-regular" width="20px" height="20px" style="color: rgb(var(--v-theme-secondary));" />
+                            </template>
+                            <v-list-item-title class="ml-3">エンコード済みファイルをダウンロード</v-list-item-title>
+                        </v-list-item>
                         <v-list-item @click="reanalyzeVideo" v-ftooltip="'再生時に必要な録画ファイル情報・番組情報・サムネイルなどをすべて再解析・再生成します（数分かかります）'">
                             <template v-slot:prepend>
                                 <Icon icon="fluent:book-arrow-clockwise-20-regular" width="20px" height="20px" />
@@ -114,6 +132,14 @@
                                 <Icon icon="fluent:image-arrow-counterclockwise-24-regular" width="20px" height="20px" />
                             </template>
                             <v-list-item-title class="ml-3">サムネイルを再生成</v-list-item-title>
+                        </v-list-item>
+                        <v-list-item @click="show_encoding_dialog = true"
+                            :disabled="program.recorded_video.status !== 'Recorded'"
+                            v-ftooltip="'録画ファイルをエンコードキューに追加し、MP4 にトランスコードします'">
+                            <template v-slot:prepend>
+                                <Icon icon="fluent:video-clip-24-regular" width="20px" height="20px" />
+                            </template>
+                            <v-list-item-title class="ml-3">エンコードキューに追加</v-list-item-title>
                         </v-list-item>
                         <v-list-item v-if="forSeries" @click="show_remove_from_series = true">
                             <template v-slot:prepend>
@@ -134,6 +160,62 @@
         </div>
     </router-link>
     <RecordedFileInfoDialog :program="program" v-model:show="show_video_info" />
+
+    <!-- エンコードキュー追加ダイアログ -->
+    <v-dialog max-width="500" v-model="show_encoding_dialog">
+        <v-card>
+            <v-card-title class="d-flex justify-center pt-6 font-weight-bold">エンコードキューに追加</v-card-title>
+            <v-card-text class="pt-4 pb-2">
+                <!-- プロファイル選択 -->
+                <div class="mb-4">
+                    <div class="text-subtitle-2 mb-1">エンコードプロファイル</div>
+                    <v-select color="primary" variant="outlined" hide-details density="compact"
+                        :items="encoding_profile_names"
+                        v-model="selected_profile_name"
+                        @update:modelValue="onProfileChanged" />
+                </div>
+                <!-- プロファイルの詳細表示 (読み取り専用のサマリー) -->
+                <div v-if="selected_profile" class="encoding-profile-summary pa-3 rounded mb-3">
+                    <div class="d-flex justify-space-between mb-1">
+                        <span class="text-caption">エンコーダー</span>
+                        <span class="text-caption font-weight-bold">{{ selected_profile.encoder_type }}</span>
+                    </div>
+                    <div class="d-flex justify-space-between mb-1">
+                        <span class="text-caption">映像コーデック</span>
+                        <span class="text-caption font-weight-bold">{{ selected_profile.video_codec }}</span>
+                    </div>
+                    <div class="d-flex justify-space-between mb-1">
+                        <span class="text-caption">品質プリセット</span>
+                        <span class="text-caption font-weight-bold">{{ selected_profile.quality_preset }}</span>
+                    </div>
+                    <div class="d-flex justify-space-between mb-1">
+                        <span class="text-caption">映像ビットレート</span>
+                        <span class="text-caption font-weight-bold">{{ selected_profile.video_bitrate }}</span>
+                    </div>
+                    <div class="d-flex justify-space-between mb-1">
+                        <span class="text-caption">音声ビットレート</span>
+                        <span class="text-caption font-weight-bold">{{ selected_profile.audio_bitrate }}</span>
+                    </div>
+                    <div class="d-flex justify-space-between mb-1">
+                        <span class="text-caption">出力形式</span>
+                        <span class="text-caption font-weight-bold">{{ selected_profile.output_format }}</span>
+                    </div>
+                    <div class="d-flex justify-space-between">
+                        <span class="text-caption">CM 処理</span>
+                        <span class="text-caption font-weight-bold">{{ getCMProcessingLabel(selected_profile.cm_processing) }}</span>
+                    </div>
+                </div>
+                <div class="text-caption text-medium-emphasis">
+                    プロファイルの設定は <router-link class="link" to="/settings/encoding">エンコード設定</router-link> から変更できます。
+                </div>
+            </v-card-text>
+            <v-card-actions class="px-6 pb-5">
+                <v-spacer />
+                <v-btn variant="text" @click="show_encoding_dialog = false">キャンセル</v-btn>
+                <v-btn variant="flat" color="secondary" @click="addToEncodingQueue()">追加</v-btn>
+            </v-card-actions>
+        </v-card>
+    </v-dialog>
 
     <!-- 録画ファイル削除確認ダイアログ -->
     <v-dialog max-width="750" v-model="show_delete_confirmation">
@@ -190,7 +272,9 @@ import { ref, computed } from 'vue';
 
 import RecordedFileInfoDialog from '@/components/Videos/Dialogs/RecordedFileInfoDialog.vue';
 import Message from '@/message';
+import EncodingTasks, { IEncodingTask } from '@/services/EncodingTasks';
 import SeriesService from '@/services/Series';
+import Settings, { IEncodingProfile } from '@/services/Settings';
 import Videos, { IRecordedProgram } from '@/services/Videos';
 import useSettingsStore from '@/stores/SettingsStore';
 import useUserStore from '@/stores/UserStore';
@@ -222,10 +306,71 @@ const show_video_info = ref(false);
 const show_delete_confirmation = ref(false);
 // シリーズ除外確認ダイアログの表示状態
 const show_remove_from_series = ref(false);
+// エンコードキュー追加ダイアログの表示状態
+const show_encoding_dialog = ref(false);
+
+// エンコードプロファイル一覧 (サーバー設定から取得)
+const encoding_profiles = ref<IEncodingProfile[]>([]);
+// プロファイル名の一覧 (v-select の選択肢用)
+const encoding_profile_names = computed(() => encoding_profiles.value.map(p => p.name));
+// 選択中のプロファイル名
+const selected_profile_name = ref('');
+// 選択中のプロファイルオブジェクト
+const selected_profile = computed(() => encoding_profiles.value.find(p => p.name === selected_profile_name.value) ?? null);
+
+// プロファイル変更時のコールバック (特にロジックは不要だが、将来の拡張用に定義)
+const onProfileChanged = () => {};
+
+// CM 処理モードの日本語ラベルを返す
+const getCMProcessingLabel = (mode: string): string => {
+    switch (mode) {
+        case 'None': return 'なし';
+        case 'Remove': return 'CM 除去';
+        case 'SeparateOutput': return '分離出力';
+        default: return mode;
+    }
+};
+
+// サーバー設定からエンコードプロファイル一覧を取得して反映
+Settings.fetchServerSettings().then((settings) => {
+    if (settings) {
+        encoding_profiles.value = settings.encoding.profiles;
+        selected_profile_name.value = settings.encoding.default_profile_name;
+    }
+});
+
+// この録画番組に紐づくエンコードタスク (サブ ID リンク)
+// recorded_video_id でフィルタして、完了済み・エンコード中のタスクを取得する
+const completed_encoding_task = ref<IEncodingTask | null>(null);
+const active_encoding_task = ref<IEncodingTask | null>(null);
+
+// エンコードタスクの取得 (サブ ID リンク: エンコード済みファイルと元の録画を紐付ける)
+EncodingTasks.fetchAll(undefined, props.program.recorded_video.id).then((result) => {
+    if (result && result.encoding_tasks.length > 0) {
+        // 完了済みタスクを優先して取得 (最新のものを使用)
+        const completed = result.encoding_tasks.find(t => t.status === 'Completed');
+        if (completed) {
+            completed_encoding_task.value = completed;
+        }
+        // エンコード中のタスクも取得
+        const encoding = result.encoding_tasks.find(t => t.status === 'Encoding' || t.status === 'Pending');
+        if (encoding) {
+            active_encoding_task.value = encoding;
+        }
+    }
+});
 
 // 録画ファイルのダウンロード (location.href を変更し、ダウンロード自体はブラウザに任せる)
 const downloadVideo = () => {
     window.location.href = `${Utils.api_base_url}/videos/${props.program.id}/download`;
+};
+
+// エンコード済みファイルのダウンロード
+const downloadEncodedVideo = () => {
+    if (completed_encoding_task.value) {
+        // エンコード済みファイルのパスをサーバー経由でダウンロードする
+        window.location.href = `${Utils.api_base_url}/encoding-tasks/${completed_encoding_task.value.id}/download`;
+    }
 };
 
 // メタデータ再解析
@@ -243,6 +388,18 @@ const regenerateThumbnail = async () => {
     const result = await Videos.regenerateThumbnail(props.program.id);
     if (result === true) {
         Message.success('サムネイルの再生成が完了しました。');
+    }
+};
+
+// エンコードキューに追加 (選択中のプロファイル名をサーバーに送信し、サーバー側でプロファイルの設定値を解決する)
+const addToEncodingQueue = async () => {
+    show_encoding_dialog.value = false;
+    const result = await EncodingTasks.add({
+        recorded_video_id: props.program.recorded_video.id,
+        profile_name: selected_profile_name.value,
+    });
+    if (result !== null) {
+        Message.success('エンコードキューに追加しました。');
     }
 };
 
@@ -325,6 +482,10 @@ const removeFromSeries = async () => {
 
 </script>
 <style lang="scss" scoped>
+
+.encoding-profile-summary {
+    background: rgb(var(--v-theme-background));
+}
 
 .recorded-program {
     display: flex;
@@ -435,6 +596,20 @@ const removeFromSeries = async () => {
                 gap: 3px;
                 svg {
                     color: rgb(var(--v-theme-error));
+                }
+            }
+
+            &--encoded {
+                gap: 3px;
+                background: rgba(var(--v-theme-secondary), 0.9);
+                color: #fff;
+            }
+
+            &--encoding {
+                gap: 3px;
+                svg {
+                    color: rgb(var(--v-theme-secondary));
+                    animation: progress-rotate 1.5s infinite;
                 }
             }
 
