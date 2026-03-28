@@ -620,9 +620,15 @@ class EncodingQueueManager:
             # 選択されて concat フィルターのストリーム数不一致エラーが発生する。
             filter_parts: list[str] = []
             for i, (start, end) in enumerate(keep_segments):
-                # 映像: PTS を正規化してから区間を trim で切り出し、PTS を区間先頭基準にリセット
+                # 映像: PTS を正規化 → yadif でインターレース解除 → trim で区間切り出し → PTS リセット
+                # yadif を trim の前に適用する理由:
+                #   trim で切り出した区間の先頭フレームは、前のフレームとのフィールド参照が欠如するため
+                #   concat 後に yadif を適用すると先頭フレームがグレー (不完全なデコード) になる。
+                #   yadif を trim の前に適用することで、フル映像のフィールド情報を使ってインターレース
+                #   解除した後に切り出すため、区間先頭でもクリーンなプログレッシブフレームが得られる。
                 filter_parts.append(
-                    f'[0:v:0]setpts=PTS-STARTPTS,trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{i}]'
+                    f'[0:v:0]setpts=PTS-STARTPTS,yadif=mode=0:parity=-1:deint=1,'
+                    f'trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{i}]'
                 )
                 # 音声: PTS を正規化してから区間を atrim で切り出し、PTS を区間先頭基準にリセット
                 filter_parts.append(
@@ -632,11 +638,7 @@ class EncodingQueueManager:
             # 各区間のラベルを結合して concat フィルターへ渡す
             n = len(keep_segments)
             concat_inputs = ''.join(f'[v{i}][a{i}]' for i in range(n))
-            filter_parts.append(f'{concat_inputs}concat=n={n}:v=1:a=1[v_concat][aout]')
-
-            # インターレース解除は concat 後に一括適用 (区間ごとに適用すると
-            # 区間先頭の参照フレーム欠如で画質が劣化するため、後段でまとめて処理する)
-            filter_parts.append('[v_concat]yadif=mode=0:parity=-1:deint=1[vout]')
+            filter_parts.append(f'{concat_inputs}concat=n={n}:v=1:a=1[vout][aout]')
 
             options.extend(['-filter_complex', ';'.join(filter_parts)])
             options.extend(['-map', '[vout]', '-map', '[aout]'])
