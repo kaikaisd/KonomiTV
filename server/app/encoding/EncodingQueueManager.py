@@ -368,6 +368,11 @@ class EncodingQueueManager:
 
         encoder_type = task.encoder_type
 
+        # エンコーダーコマンド全体をログに出力 (デバッグ用)
+        # filter_complex の内容が長くなるため、個別にも出力する
+        cmd_str = ' '.join([encoder_path, *encoder_options])
+        logging.info(f'[EncodingQueueManager] Encoder command: {cmd_str}')
+
         self._encoder_process = await asyncio.subprocess.create_subprocess_exec(
             encoder_path, *encoder_options,
             stdin=asyncio.subprocess.DEVNULL,
@@ -409,13 +414,29 @@ class EncodingQueueManager:
         Returns:
             list[schemas.CMSection] | None: CM 区間リスト。CM 処理が無効または未検出の場合は None
         """
-        if task.cm_processing == 'None' or task.recorded_video_id is None:
+        if task.cm_processing == 'None':
+            logging.debug(f'[EncodingQueueManager] CM processing is disabled. [task_id: {task.id}]')
+            return None
+        if task.recorded_video_id is None:
+            logging.warning(f'[EncodingQueueManager] CM processing requested but no recorded_video_id. [task_id: {task.id}]')
             return None
 
         recorded_video = await RecordedVideo.get_or_none(id=task.recorded_video_id)
-        if recorded_video is None or recorded_video.cm_sections is None or len(recorded_video.cm_sections) == 0:
+        if recorded_video is None:
+            logging.warning(f'[EncodingQueueManager] CM processing requested but RecordedVideo not found. '
+                            f'[task_id: {task.id}, recorded_video_id: {task.recorded_video_id}]')
+            return None
+        if recorded_video.cm_sections is None:
+            logging.warning(f'[EncodingQueueManager] CM processing requested but CM sections not yet analyzed. '
+                            f'[task_id: {task.id}, recorded_video_id: {task.recorded_video_id}]')
+            return None
+        if len(recorded_video.cm_sections) == 0:
+            logging.info(f'[EncodingQueueManager] CM processing requested but no CM sections detected in recording. '
+                         f'[task_id: {task.id}, recorded_video_id: {task.recorded_video_id}]')
             return None
 
+        logging.info(f'[EncodingQueueManager] Retrieved {len(recorded_video.cm_sections)} CM sections from DB. '
+                     f'[task_id: {task.id}, sections: {recorded_video.cm_sections}]')
         return recorded_video.cm_sections
 
 
@@ -452,6 +473,12 @@ class EncodingQueueManager:
         # 最後の CM 以降に本編が残っている場合
         if current_pos < duration:
             keep_segments.append((current_pos, duration))
+
+        # デバッグ用: 算出された本編区間をログに出力
+        total_keep = sum(end - start for start, end in keep_segments)
+        total_cm = duration - total_keep
+        logging.info(f'[EncodingQueueManager] Keep segments computed. '
+                     f'[segments: {keep_segments}, total_keep: {total_keep:.3f}s, total_cm: {total_cm:.3f}s, duration: {duration:.3f}s]')
 
         return keep_segments
 
@@ -557,22 +584,33 @@ class EncodingQueueManager:
 
         options: list[str] = []
 
-        # 入力ファイル (CM 除去の有無にかかわらず同じ入力を使う)
+        # 入力ファイル
+        # MPEG-TS 入力の場合はフォーマットを明示的に指定する (放送 TS のコンテナ判定ミスを防ぐ)
+        if task.source_file_path.lower().endswith(('.ts', '.m2ts', '.mts')):
+            options.extend(['-f', 'mpegts'])
         options.extend(['-i', task.source_file_path])
 
         if keep_segments is not None and len(keep_segments) > 0:
             # CM 除去モード: trim/atrim フィルターで各本編区間を切り出し、setpts/asetpts で
             # タイムスタンプをリセットしてから concat フィルターで結合し、最後に yadif を適用する
-            # 各区間のタイムスタンプをリセットしないと concat 後に不連続なタイムスタンプになる
+            #
+            # 重要: MPEG-TS の PTS は放送開始時刻基準の大きな値 (例: 126000+ 秒) から始まるため、
+            # trim フィルターの start/end 秒指定とマッチしない。trim の前に setpts=PTS-STARTPTS を
+            # 挿入して PTS を 0 基準に正規化することで、cm_sections の再生相対秒と正確に一致させる。
+            # trim 後の setpts=PTS-STARTPTS は concat 用にタイムスタンプを区間先頭にリセットする。
+            #
+            # 音声ストリームは [0:a:0] で第1音声トラックのみを明示的に選択する。
+            # 日本の放送 TS は主音声+副音声の2トラック構成が多く、[0:a] だと複数トラックが
+            # 選択されて concat フィルターのストリーム数不一致エラーが発生する。
             filter_parts: list[str] = []
             for i, (start, end) in enumerate(keep_segments):
-                # 映像: 区間を trim で切り出し、PTS を区間先頭基準にリセット
+                # 映像: PTS を正規化してから区間を trim で切り出し、PTS を区間先頭基準にリセット
                 filter_parts.append(
-                    f'[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{i}]'
+                    f'[0:v:0]setpts=PTS-STARTPTS,trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{i}]'
                 )
-                # 音声: 区間を atrim で切り出し、PTS を区間先頭基準にリセット
+                # 音声: PTS を正規化してから区間を atrim で切り出し、PTS を区間先頭基準にリセット
                 filter_parts.append(
-                    f'[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{i}]'
+                    f'[0:a:0]asetpts=PTS-STARTPTS,atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{i}]'
                 )
 
             # 各区間のラベルを結合して concat フィルターへ渡す
@@ -588,8 +626,10 @@ class EncodingQueueManager:
             options.extend(['-map', '[vout]', '-map', '[aout]'])
         else:
             # 通常モード: ストリームマッピングと yadif フィルターを直接指定
+            # 映像は最初のストリーム、音声は第1音声トラックを明示的に選択
             options.extend(['-map', '0:v:0', '-map', '0:a:0'])
             options.extend(['-vf', 'yadif=mode=0:parity=-1:deint=1'])
+            logging.debug('[EncodingQueueManager] Normal mode (no CM removal).')
 
         # 映像コーデック
         if task.video_codec == 'H.265':
