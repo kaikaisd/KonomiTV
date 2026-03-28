@@ -625,7 +625,12 @@ def SaveConfig(config: ServerSettings) -> None:
     yaml.default_flow_style = None  # None を使うと、スカラー以外のものはブロックスタイルになる
     yaml.preserve_quotes = True
     yaml.width = 20
-    yaml.indent(mapping=4, sequence=4, offset=4)
+    # mapping=4: 辞書キーのインデント幅 (encoding: → output_directory: など)
+    # sequence=6: シーケンス要素のコンテンツインデント幅 (profiles: → name: のインデント量)
+    # offset=4: シーケンスのダッシュ "-" のオフセット (profiles: から "-" までのスペース数)
+    # sequence=offset=4 だと "- " の2文字分により後続キーとの位置が合わず過剰なインデントになるため、
+    # sequence=offset+2=6 とすることで "- " 直後のキーと後続行のキーの位置が一致する
+    yaml.indent(mapping=4, sequence=6, offset=4)
     try:
         with open(_CONFIG_YAML_PATH, encoding='utf-8') as file:
             config_raw = yaml.load(file)

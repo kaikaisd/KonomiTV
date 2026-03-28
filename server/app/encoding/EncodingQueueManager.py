@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import ClassVar
 
+import anyio
+
 from app import logging, schemas
 from app.config import Config
 from app.constants import LIBRARY_PATH
@@ -426,11 +428,25 @@ class EncodingQueueManager:
             logging.warning(f'[EncodingQueueManager] CM processing requested but RecordedVideo not found. '
                             f'[task_id: {task.id}, recorded_video_id: {task.recorded_video_id}]')
             return None
+
+        # CM 区間情報が未解析 (None) の場合、エンコード開始前にオンデマンドで CM 検出を実行する
+        # 録画後のバックグラウンド解析がスキップされたケース (バッチスキャンでファイルハッシュ不変) や、
+        # バックグラウンド解析がまだ完了していないケースに対応するため
         if recorded_video.cm_sections is None:
-            logging.warning(f'[EncodingQueueManager] CM processing requested but CM sections not yet analyzed. '
-                            f'[task_id: {task.id}, recorded_video_id: {task.recorded_video_id}]')
-            return None
-        if len(recorded_video.cm_sections) == 0:
+            logging.info(f'[EncodingQueueManager] CM sections not yet analyzed. '
+                         f'Running on-demand CM detection... [task_id: {task.id}, recorded_video_id: {task.recorded_video_id}]')
+            from app.metadata.CMSectionsDetector import CMSectionsDetector
+            detector = CMSectionsDetector(
+                file_path=anyio.Path(recorded_video.file_path),
+                duration_sec=recorded_video.duration,
+            )
+            await detector.detectAndSave()
+            # DB から最新の CM 区間情報を再取得する
+            await recorded_video.refresh_from_db()
+            logging.info(f'[EncodingQueueManager] On-demand CM detection completed. '
+                         f'[task_id: {task.id}, cm_sections: {recorded_video.cm_sections}]')
+
+        if recorded_video.cm_sections is None or len(recorded_video.cm_sections) == 0:
             logging.info(f'[EncodingQueueManager] CM processing requested but no CM sections detected in recording. '
                          f'[task_id: {task.id}, recorded_video_id: {task.recorded_video_id}]')
             return None
