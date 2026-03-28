@@ -261,6 +261,9 @@ class CMSectionsDetector:
             # いずれかの CM 標準長に許容誤差以内で一致するか判定
             matches = any(abs(duration - cm_dur) <= TOLERANCE for cm_dur in CM_DURATIONS)
             is_cm_duration.append(matches)
+            # デバッグ用: 各セグメントの長さと CM 判定結果をログに出力
+            logging.debug(f'{self.file_path}: Segment {len(is_cm_duration)-1}: '
+                          f'{seg_start:.3f}-{seg_end:.3f} ({duration:.3f}s) -> CM={matches}')
 
         # CM 長に一致するセグメントが連続している区間 (ラン) を検出する
         # 連続数が 2 以上のランを CM ブロックとして採用する
@@ -275,6 +278,18 @@ class CMSectionsDetector:
                     i += 1
                 run_end = i  # run_end は排他的 (最後の CM 長セグメントのインデックス + 1)
                 run_length = run_end - run_start
+
+                # 末尾の短いセグメントを CM ブロックに吸収する処理
+                # 録画が CM の途中で終了した場合や、CM 後に短い無音区間が残っている場合、
+                # 最後のセグメントが CM 標準長に一致しないため連続ランが途切れてしまう。
+                # 末尾のセグメントが短い (10秒未満) 場合、CM ブロックの一部として扱う。
+                if run_end < len(segments):
+                    trailing_seg = segments[run_end]
+                    trailing_duration = trailing_seg[1] - trailing_seg[0]
+                    # 末尾が動画の最後に近く (残り5秒以内) かつ短い場合は吸収する
+                    if trailing_duration < 10.0 and (self.duration_sec - trailing_seg[1]) < 5.0:
+                        run_end += 1
+                        i = run_end
 
                 # 2つ以上連続している場合のみ CM ブロックとして採用する
                 # 本編中にたまたま 30秒ぴったりのセグメントが1つだけ存在することはあり得るが、
@@ -302,12 +317,6 @@ class CMSectionsDetector:
             first_block_duration = cm_sections[0]['end_time'] - cm_sections[0]['start_time']
             if first_block_duration < 60.0:
                 cm_sections = cm_sections[1:]
-
-        # 動画の末尾付近 (最後の5秒以内に終了) の CM ブロックも同様に処理する
-        if cm_sections and (self.duration_sec - cm_sections[-1]['end_time']) < 5.0:
-            last_block_duration = cm_sections[-1]['end_time'] - cm_sections[-1]['start_time']
-            if last_block_duration < 60.0:
-                cm_sections = cm_sections[:-1]
 
         return cm_sections
 
