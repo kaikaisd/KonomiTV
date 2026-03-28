@@ -213,15 +213,16 @@ class EncodingQueueManager:
             if duration <= 0:
                 raise RuntimeError('Failed to determine source file duration.')
 
-            # CM 区間情報を取得 (CM 除去が有効な場合)
+            # CM 区間情報を取得 (CM 処理が有効な場合)
             cm_sections = await self._getCMSections(task)
             keep_segments: list[tuple[float, float]] | None = None
             if cm_sections is not None:
                 keep_segments = self._computeKeepSegments(cm_sections, duration)
                 if len(keep_segments) == 0:
                     raise RuntimeError('No content segments remain after CM removal.')
-                logging.info(f'[EncodingQueueManager] CM removal enabled. '
-                             f'[task_id: {task.id}, cm_sections: {len(cm_sections)}, keep_segments: {len(keep_segments)}]')
+                logging.info(f'[EncodingQueueManager] CM processing enabled. '
+                             f'[task_id: {task.id}, mode: {task.cm_processing}, '
+                             f'cm_sections: {len(cm_sections)}, keep_segments: {len(keep_segments)}]')
 
             # HWEncC の CM 除去に必要なソース映像のフレームレートを RecordedVideo から取得する
             # HWEncC の --trim オプションはフレーム番号で指定するため、秒からフレーム番号への変換に使う
@@ -231,7 +232,8 @@ class EncodingQueueManager:
                 if recorded_video is not None:
                     source_frame_rate = recorded_video.video_frame_rate
 
-            # エンコーダーコマンドを組み立てて実行
+            # === パス1: 本編のエンコード ===
+            # CM 除去が有効な場合は keep_segments (本編区間) のみをエンコードする
             encoder_options = self._buildEncoderCommand(task, keep_segments, source_frame_rate)
             encoder_type = task.encoder_type
 
@@ -240,55 +242,91 @@ class EncodingQueueManager:
             if encoder_path is None or not Path(encoder_path).exists():
                 raise RuntimeError(f'Encoder binary not found: {encoder_type}')
 
-            logging.info(f'[EncodingQueueManager] Launching encoder. [task_id: {task.id}, encoder: {encoder_type}]')
+            logging.info(f'[EncodingQueueManager] Launching encoder (main content). [task_id: {task.id}, encoder: {encoder_type}]')
+
+            # CM 除去時は本編区間の合計時間をエンコード対象の実効時間として使う
+            # FFmpeg の time= 出力はデコード後の出力タイムラインを示すため、
+            # trim/concat で切り出した本編のみの場合は実効時間で割らないと進捗率が正しくならない
+            # HWEncC は進捗率を直接出力するため影響なし
+            effective_duration = duration
+            if keep_segments is not None:
+                effective_duration = sum(end - start for start, end in keep_segments)
 
             # エンコーダープロセスを起動
-            self._encoder_process = await asyncio.subprocess.create_subprocess_exec(
-                encoder_path, *encoder_options,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.DEVNULL if encoder_type == 'FFmpeg' else asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            return_code = await self._runEncoder(task, encoder_path, encoder_options, effective_duration)
 
-            # stderr からエンコード進捗をパースしながらプロセスの完了を待つ
-            assert self._encoder_process.stderr is not None
-            await self._monitorProgress(task, self._encoder_process.stderr, duration)
-
-            # プロセスの終了を待つ
-            return_code = await self._encoder_process.wait()
-
+            # キャンセルチェック
             if self._cancel_requested:
-                # キャンセルされた場合
                 task.status = 'Cancelled'
                 task.encoding_finished_at = datetime.now()
                 await task.save()
-                # 中途半端な出力ファイルを削除
-                if Path(task.output_file_path).exists():
-                    Path(task.output_file_path).unlink()
-                if task.cm_output_file_path and Path(task.cm_output_file_path).exists():
-                    Path(task.cm_output_file_path).unlink()
+                self._cleanupOutputFiles(task)
                 logging.info(f'[EncodingQueueManager] Encoding cancelled. [task_id: {task.id}]')
 
-            elif return_code == 0:
-                # 正常終了
-                task.status = 'Completed'
-                task.progress = 100.0
-                task.encoding_finished_at = datetime.now()
-                await task.save()
-                logging.info(f'[EncodingQueueManager] Encoding completed. [task_id: {task.id}, output: {task.output_file_path}]')
-
-            else:
-                # 異常終了
+            elif return_code != 0:
                 task.status = 'Failed'
                 task.fail_reason = f'Encoder exited with code {return_code}'
                 task.encoding_finished_at = datetime.now()
                 await task.save()
-                # 中途半端な出力ファイルを削除
-                if Path(task.output_file_path).exists():
-                    Path(task.output_file_path).unlink()
-                if task.cm_output_file_path and Path(task.cm_output_file_path).exists():
-                    Path(task.cm_output_file_path).unlink()
+                self._cleanupOutputFiles(task)
                 logging.error(f'[EncodingQueueManager] Encoding failed. [task_id: {task.id}, return_code: {return_code}]')
+
+            else:
+                # === パス1 正常終了 ===
+                logging.info(f'[EncodingQueueManager] Main content encoding completed. '
+                             f'[task_id: {task.id}, output: {task.output_file_path}]')
+
+                # === パス2: SeparateOutput モードの場合、CM 区間を別ファイルにエンコードする ===
+                # Amatsukaze の CM 分離出力に相当する機能: 本編とは別に CM 区間のみを結合して出力する
+                # cm_video_bitrate が指定されている場合は CM ファイルに異なるビットレートを適用する
+                if task.cm_processing == 'SeparateOutput' and cm_sections is not None and task.cm_output_file_path:
+                    cm_segments = [(cm['start_time'], cm['end_time']) for cm in cm_sections]
+                    if len(cm_segments) > 0:
+                        logging.info(f'[EncodingQueueManager] Launching encoder (CM segments). '
+                                     f'[task_id: {task.id}, cm_segments: {len(cm_segments)}]')
+
+                        # CM 用のビットレートを決定する (空文字列の場合は本編と同じビットレートを使用)
+                        cm_video_bitrate = task.cm_video_bitrate if task.cm_video_bitrate else task.video_bitrate
+
+                        # CM 区間用のエンコーダーコマンドを組み立てる
+                        cm_encoder_options = self._buildEncoderCommand(
+                            task, cm_segments, source_frame_rate,
+                            output_path_override=task.cm_output_file_path,
+                            video_bitrate_override=cm_video_bitrate,
+                        )
+
+                        # CM 区間の実効時間
+                        cm_effective_duration = sum(end - start for start, end in cm_segments)
+
+                        # CM エンコーダープロセスを起動
+                        cm_return_code = await self._runEncoder(task, encoder_path, cm_encoder_options, cm_effective_duration)
+
+                        if self._cancel_requested:
+                            task.status = 'Cancelled'
+                            task.encoding_finished_at = datetime.now()
+                            await task.save()
+                            self._cleanupOutputFiles(task)
+                            logging.info(f'[EncodingQueueManager] Encoding cancelled during CM pass. [task_id: {task.id}]')
+                        elif cm_return_code != 0:
+                            # CM パスが失敗しても本編は完了しているので警告のみ出す
+                            # 本編ファイルは残し、CM ファイルのみ削除する
+                            if Path(task.cm_output_file_path).exists():
+                                Path(task.cm_output_file_path).unlink()
+                            task.cm_output_file_path = ''
+                            logging.warning(f'[EncodingQueueManager] CM segment encoding failed, '
+                                            f'but main content is intact. '
+                                            f'[task_id: {task.id}, return_code: {cm_return_code}]')
+                        else:
+                            logging.info(f'[EncodingQueueManager] CM segment encoding completed. '
+                                         f'[task_id: {task.id}, cm_output: {task.cm_output_file_path}]')
+
+                # キャンセルされていなければ完了にする
+                if not self._cancel_requested:
+                    task.status = 'Completed'
+                    task.progress = 100.0
+                    task.encoding_finished_at = datetime.now()
+                    await task.save()
+                    logging.info(f'[EncodingQueueManager] Encoding completed. [task_id: {task.id}, output: {task.output_file_path}]')
 
         except Exception as ex:
             # 予期しないエラー
@@ -296,17 +334,68 @@ class EncodingQueueManager:
             task.fail_reason = str(ex)
             task.encoding_finished_at = datetime.now()
             await task.save()
-            # 中途半端な出力ファイルを削除
-            if task.output_file_path and Path(task.output_file_path).exists():
-                Path(task.output_file_path).unlink()
-            if task.cm_output_file_path and Path(task.cm_output_file_path).exists():
-                Path(task.cm_output_file_path).unlink()
+            self._cleanupOutputFiles(task)
             logging.error(f'[EncodingQueueManager] Encoding task failed with exception. [task_id: {task.id}]', exc_info=True)
 
         finally:
             self._encoder_process = None
             self._current_task_id = None
             self._cancel_requested = False
+
+
+    async def _runEncoder(
+        self,
+        task: EncodingTask,
+        encoder_path: str,
+        encoder_options: list[str],
+        effective_duration: float,
+    ) -> int:
+        """
+        エンコーダープロセスを起動し、進捗を監視しながら終了を待つ。
+        本編エンコードと CM エンコードの両方で共通して使用される。
+
+        Args:
+            task (EncodingTask): エンコードタスク (進捗率の DB 更新に使用)
+            encoder_path (str): エンコーダーのバイナリパス
+            encoder_options (list[str]): エンコーダーに渡すオプション
+            effective_duration (float): エンコード対象の実効時間 (秒)。
+                FFmpeg の time= 出力から進捗率を算出する際の分母として使用される。
+                CM 除去時は本編区間の合計時間、通常モードはソースファイルの全長。
+
+        Returns:
+            int: エンコーダープロセスの終了コード
+        """
+
+        encoder_type = task.encoder_type
+
+        self._encoder_process = await asyncio.subprocess.create_subprocess_exec(
+            encoder_path, *encoder_options,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL if encoder_type == 'FFmpeg' else asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        # stderr からエンコード進捗をパースしながらプロセスの完了を待つ
+        assert self._encoder_process.stderr is not None
+        await self._monitorProgress(task, self._encoder_process.stderr, effective_duration)
+
+        # プロセスの終了を待つ
+        return_code = await self._encoder_process.wait()
+        return return_code
+
+
+    def _cleanupOutputFiles(self, task: EncodingTask) -> None:
+        """
+        エンコード失敗・キャンセル時に中途半端な出力ファイルを削除する。
+        本編ファイルと CM ファイルの両方を対象とする。
+
+        Args:
+            task (EncodingTask): エンコードタスク
+        """
+        if task.output_file_path and Path(task.output_file_path).exists():
+            Path(task.output_file_path).unlink()
+        if task.cm_output_file_path and Path(task.cm_output_file_path).exists():
+            Path(task.cm_output_file_path).unlink()
 
 
     async def _getCMSections(self, task: EncodingTask) -> list[schemas.CMSection] | None:
@@ -403,6 +492,8 @@ class EncodingQueueManager:
         task: EncodingTask,
         keep_segments: list[tuple[float, float]] | None = None,
         source_frame_rate: float | None = None,
+        output_path_override: str | None = None,
+        video_bitrate_override: str | None = None,
     ) -> list[str]:
         """
         エンコーダーに渡すコマンドラインオプションを組み立てる。
@@ -410,25 +501,33 @@ class EncodingQueueManager:
         HWEncC の場合は同様の変換コマンドを返す。
         CM 除去が有効な場合、本編区間のみをエンコードするオプションを付加する。
 
+        SeparateOutput モードで CM 区間を別ファイルに出力する際は、output_path_override に
+        CM ファイルのパスを、video_bitrate_override に CM 用のビットレートを指定する。
+
         Args:
             task (EncodingTask): エンコードタスク
-            keep_segments (list[tuple[float, float]] | None): CM 除去時の本編区間リスト (開始秒, 終了秒)
+            keep_segments (list[tuple[float, float]] | None): エンコード対象の区間リスト (開始秒, 終了秒)。
+                本編エンコード時は CM を除いた本編区間、CM エンコード時は CM 区間そのもの。
             source_frame_rate (float | None): HWEncC の --trim 計算に使うソース映像のフレームレート
+            output_path_override (str | None): 出力ファイルパスの上書き (CM 分離出力時に使用)
+            video_bitrate_override (str | None): 映像ビットレートの上書き (CM 分離出力時に使用)
 
         Returns:
             list[str]: エンコーダーに渡すオプションの配列
         """
 
         if task.encoder_type == 'FFmpeg':
-            return self._buildFFmpegCommand(task, keep_segments)
+            return self._buildFFmpegCommand(task, keep_segments, output_path_override, video_bitrate_override)
         else:
-            return self._buildHWEncCCommand(task, keep_segments, source_frame_rate)
+            return self._buildHWEncCCommand(task, keep_segments, source_frame_rate, output_path_override, video_bitrate_override)
 
 
     def _buildFFmpegCommand(
         self,
         task: EncodingTask,
         keep_segments: list[tuple[float, float]] | None = None,
+        output_path_override: str | None = None,
+        video_bitrate_override: str | None = None,
     ) -> list[str]:
         """
         FFmpeg 用のコマンドラインオプションを組み立てる (TS → MP4 バッチトランスコード)。
@@ -439,13 +538,22 @@ class EncodingQueueManager:
         シークが失敗する。trim フィルターはデコード後のフレームストリームに作用し、FFmpeg が
         入力時に正規化した再生相対タイムスタンプと比較するため、cm_sections の値と正確に一致する。
 
+        SeparateOutput モードでの CM パスでは、keep_segments に CM 区間を渡し、
+        output_path_override に CM ファイルパスを指定して呼び出す。
+
         Args:
             task (EncodingTask): エンコードタスク
-            keep_segments (list[tuple[float, float]] | None): CM 除去時の本編区間リスト (開始秒, 終了秒)
+            keep_segments (list[tuple[float, float]] | None): エンコード対象の区間リスト (開始秒, 終了秒)
+            output_path_override (str | None): 出力ファイルパスの上書き (CM 分離出力時に使用)
+            video_bitrate_override (str | None): 映像ビットレートの上書き (CM 分離出力時に使用)
 
         Returns:
             list[str]: FFmpeg に渡すオプションの配列
         """
+
+        # 出力パスとビットレートをオーバーライドまたはタスクの値から取得
+        output_path = output_path_override or task.output_file_path
+        video_bitrate = video_bitrate_override or task.video_bitrate
 
         options: list[str] = []
 
@@ -490,7 +598,7 @@ class EncodingQueueManager:
             options.extend(['-vcodec', 'libx264', '-profile:v', 'high'])
 
         # 映像ビットレートとプリセット
-        options.extend(['-b:v', task.video_bitrate])
+        options.extend(['-b:v', video_bitrate])
         options.extend(['-preset', task.quality_preset])
 
         # ピクセルフォーマット
@@ -507,7 +615,7 @@ class EncodingQueueManager:
         else:
             # MP4: moov atom を先頭に配置してストリーミング再生を可能にする
             options.extend(['-movflags', '+faststart'])
-        options.extend(['-y', task.output_file_path])
+        options.extend(['-y', output_path])
 
         return options
 
@@ -517,6 +625,8 @@ class EncodingQueueManager:
         task: EncodingTask,
         keep_segments: list[tuple[float, float]] | None = None,
         source_frame_rate: float | None = None,
+        output_path_override: str | None = None,
+        video_bitrate_override: str | None = None,
     ) -> list[str]:
         """
         HWEncC (QSVEncC/NVEncC/VCEEncC/rkmppenc) 用のコマンドラインオプションを組み立てる。
@@ -527,14 +637,23 @@ class EncodingQueueManager:
         複数区間 (カンマ区切り) も指定できるため CM 除去に適している。
         フレーム番号への変換は RecordedVideo.video_frame_rate を使って行う。
 
+        SeparateOutput モードでの CM パスでは、keep_segments に CM 区間を渡し、
+        output_path_override に CM ファイルパスを指定して呼び出す。
+
         Args:
             task (EncodingTask): エンコードタスク
-            keep_segments (list[tuple[float, float]] | None): CM 除去時の本編区間リスト (開始秒, 終了秒)
+            keep_segments (list[tuple[float, float]] | None): エンコード対象の区間リスト (開始秒, 終了秒)
             source_frame_rate (float | None): ソース映像のフレームレート (秒→フレーム変換に使用)
+            output_path_override (str | None): 出力ファイルパスの上書き (CM 分離出力時に使用)
+            video_bitrate_override (str | None): 映像ビットレートの上書き (CM 分離出力時に使用)
 
         Returns:
             list[str]: HWEncC に渡すオプションの配列
         """
+
+        # 出力パスとビットレートをオーバーライドまたはタスクの値から取得
+        output_path = output_path_override or task.output_file_path
+        video_bitrate = video_bitrate_override or task.video_bitrate
 
         options: list[str] = []
 
@@ -573,7 +692,7 @@ class EncodingQueueManager:
             options.extend(['--codec', 'h264'])
 
         # ビットレート
-        options.extend(['--vbr', task.video_bitrate.replace('k', '')])
+        options.extend(['--vbr', video_bitrate.replace('k', '')])
 
         # 音声設定: ステレオにダウンミックス
         options.extend(['--audio-codec', 'aac', '--audio-stream', 'stereo', '--audio-bitrate', task.audio_bitrate.replace('k', '')])
@@ -584,7 +703,7 @@ class EncodingQueueManager:
         # 出力形式に応じたフォーマット指定
         hwenc_format_map = {'MP4': 'mp4', 'MKV': 'matroska', 'WebM': 'webm'}
         hwenc_format = hwenc_format_map.get(task.output_format, 'mp4')
-        options.extend(['--output-format', hwenc_format, '-o', task.output_file_path])
+        options.extend(['--output-format', hwenc_format, '-o', output_path])
 
         return options
 
