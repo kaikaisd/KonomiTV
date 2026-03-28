@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
+import re
 import time
 
 import anyio
@@ -10,6 +11,7 @@ import typer
 
 from app import logging, schemas
 from app.config import LoadConfig
+from app.constants import LIBRARY_PATH
 from app.models.RecordedVideo import RecordedVideo
 
 
@@ -46,9 +48,9 @@ class CMSectionsDetector:
             ## .chapter.txt は Amatsukaze でエンコードした際に設定次第で自動生成される
             cm_sections = await self.__detectFromChapterFile()
 
-            # チャプターファイルが存在しない場合、join_logo_scp を使って自前で解析を試みる
+            # チャプターファイルが存在しない場合、FFmpeg の silencedetect を使って自前で解析を試みる
             if not cm_sections:
-                cm_sections = await self.__detectWithJLS()
+                cm_sections = await self.__detectWithFFmpeg()
 
             # 自前でも解析できなかった（解析に失敗した）or CM 区間が1つも検出されなかった場合、
             # バックグラウンド解析処理が再度実行された際の再解析を回避するために [] を設定する
@@ -80,16 +82,234 @@ class CMSectionsDetector:
             logging.error(f'{self.file_path}: Error saving CM sections to DB:', exc_info=ex)
 
 
-    async def __detectWithJLS(self) -> list[schemas.CMSection] | None:
+    async def __detectWithFFmpeg(self) -> list[schemas.CMSection] | None:
         """
-        録画ファイルの CM 区間を join_logo_scp (with chapter_exe) を使って解析する
+        FFmpeg の silencedetect フィルターを使って録画ファイルの CM 区間を自動検出する
+
+        日本のテレビ CM の特徴を利用して CM 区間を検出する:
+        - CM は 15秒 / 30秒 / 60秒 / 90秒 のいずれかの長さ
+        - CM と CM の間は無音区間で区切られる
+        - CM は連続して複数本流れる (CM ブロック)
+
+        検出アルゴリズム:
+        1. FFmpeg の silencedetect で無音区間を検出する
+        2. 無音区間の中間点をセグメント境界とし、動画を複数セグメントに分割する
+        3. 各セグメントの長さが CM の標準的な長さ (15s/30s/60s/90s) に一致するか判定する
+        4. CM 長に一致するセグメントが 2つ以上連続している区間を CM ブロックとして検出する
 
         Returns:
-            list[schemas.CMSection] | None: 解析に成功した場合は CM 区間のリストを返す
+            list[schemas.CMSection] | None: 解析に成功した場合は CM 区間のリストを返す。
+                解析に失敗した場合は None を返す。
         """
 
-        # TODO: CM 区間を検出する処理を実装する
-        return None
+        # 無音区間を検出するための FFmpeg コマンドを構築
+        # silencedetect: 無音区間を検出するフィルター
+        #   noise=-40dB: 無音とみなす閾値 (日本の放送では CM 境界の無音は非常に静か)
+        #   d=0.3: 最低 0.3 秒以上の無音を検出対象とする (短すぎる無音を除外)
+        # -vn: 映像処理をスキップし音声のみ処理する (高速化)
+        # -f null: 出力は不要なので /dev/null に捨てる
+        ffmpeg_command = [
+            LIBRARY_PATH['FFmpeg'],
+            '-i', str(self.file_path),
+            '-vn',
+            '-af', 'silencedetect=noise=-40dB:d=0.3',
+            '-f', 'null',
+            '-',
+        ]
+
+        logging.info(f'{self.file_path}: Running FFmpeg silencedetect for CM detection...')
+
+        try:
+            # FFmpeg を非同期で実行し、stderr から silencedetect の出力を取得する
+            # silencedetect の検出結果は stderr に出力される
+            process = await asyncio.create_subprocess_exec(
+                *ffmpeg_command,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr_bytes = await process.communicate()
+            stderr_output = stderr_bytes.decode('utf-8', errors='replace')
+
+            if process.returncode != 0:
+                logging.error(f'{self.file_path}: FFmpeg silencedetect failed with return code {process.returncode}.')
+                return None
+
+        except Exception as ex:
+            logging.error(f'{self.file_path}: Failed to run FFmpeg silencedetect:', exc_info=ex)
+            return None
+
+        # silencedetect の出力から無音区間を抽出する
+        # 出力フォーマット例:
+        #   [silencedetect @ 0x...] silence_start: 123.456
+        #   [silencedetect @ 0x...] silence_end: 124.789 | silence_duration: 1.333
+        silence_sections = self.__parseSilenceDetectOutput(stderr_output)
+        logging.info(f'{self.file_path}: Detected {len(silence_sections)} silence sections.')
+
+        if len(silence_sections) == 0:
+            # 無音区間が1つも検出されなかった場合は CM 検出不可
+            return None
+
+        # 無音区間の中間点をセグメント境界として、動画をセグメントに分割する
+        # 各セグメントは (start_time, end_time) のタプル
+        segments = self.__buildSegmentsFromSilence(silence_sections)
+        logging.debug(f'{self.file_path}: Built {len(segments)} segments from silence boundaries.')
+
+        # 各セグメントが CM の標準的な長さに一致するか判定し、CM ブロックを検出する
+        cm_sections = self.__detectCMBlocks(segments)
+        logging.info(f'{self.file_path}: Detected {len(cm_sections)} CM blocks from silence analysis.')
+
+        return cm_sections
+
+
+    def __parseSilenceDetectOutput(self, stderr_output: str) -> list[tuple[float, float]]:
+        """
+        FFmpeg silencedetect フィルターの stderr 出力を解析し、無音区間のリストを返す
+
+        Args:
+            stderr_output (str): FFmpeg の stderr 出力テキスト
+
+        Returns:
+            list[tuple[float, float]]: 無音区間の (start, end) タプルのリスト
+        """
+
+        silence_sections: list[tuple[float, float]] = []
+
+        # silence_start と silence_end を正規表現で抽出する
+        # silence_start: 開始時刻
+        # silence_end: 終了時刻 (silence_duration は不要)
+        start_pattern = re.compile(r'silence_start:\s*([\d.]+)')
+        end_pattern = re.compile(r'silence_end:\s*([\d.]+)')
+
+        # silence_start と silence_end は交互に出現するので、start を保持しておき end が来たらペアにする
+        current_start: float | None = None
+        for line in stderr_output.split('\n'):
+            start_match = start_pattern.search(line)
+            end_match = end_pattern.search(line)
+
+            if start_match:
+                current_start = float(start_match.group(1))
+            if end_match and current_start is not None:
+                silence_end = float(end_match.group(1))
+                silence_sections.append((current_start, silence_end))
+                current_start = None
+
+        return silence_sections
+
+
+    def __buildSegmentsFromSilence(self, silence_sections: list[tuple[float, float]]) -> list[tuple[float, float]]:
+        """
+        無音区間の中間点をセグメント境界として、動画をセグメントに分割する
+
+        無音区間の中間点を境界として使う理由:
+        - CM と本編の境界は無音区間の「途中」にあることが多い
+        - 無音の中間点を取ることで、CM の開始/終了が正確な秒数 (15s, 30s 等) に近づく
+
+        Args:
+            silence_sections (list[tuple[float, float]]): 無音区間の (start, end) タプルのリスト
+
+        Returns:
+            list[tuple[float, float]]: セグメントの (start_time, end_time) タプルのリスト
+        """
+
+        # 無音区間の中間点をセグメント境界とする
+        boundaries: list[float] = []
+        for silence_start, silence_end in silence_sections:
+            midpoint = (silence_start + silence_end) / 2.0
+            boundaries.append(midpoint)
+
+        # 動画の先頭 (0.0) と末尾 (duration_sec) を境界リストに追加する
+        # これにより、最初のセグメントは 0.0 〜 最初の無音中間点、最後のセグメントは最後の無音中間点 〜 動画末尾となる
+        all_boundaries = [0.0, *boundaries, self.duration_sec]
+
+        # 隣接する境界点のペアをセグメントとして返す
+        segments: list[tuple[float, float]] = []
+        for i in range(len(all_boundaries) - 1):
+            seg_start = all_boundaries[i]
+            seg_end = all_boundaries[i + 1]
+            # 極端に短いセグメント (0.5秒未満) は無視する
+            # 連続する無音区間が近接している場合にゴミセグメントが生じるのを防ぐ
+            if seg_end - seg_start >= 0.5:
+                segments.append((seg_start, seg_end))
+
+        return segments
+
+
+    def __detectCMBlocks(self, segments: list[tuple[float, float]]) -> list[schemas.CMSection]:
+        """
+        セグメントの長さのパターンから CM ブロックを検出する
+
+        日本のテレビ CM は 15秒 / 30秒 / 60秒 / 90秒 のいずれかの長さである。
+        CM は複数本連続して流れるため、CM 長に一致するセグメントが 2つ以上連続している区間を CM ブロックとみなす。
+
+        Args:
+            segments (list[tuple[float, float]]): セグメントの (start_time, end_time) タプルのリスト
+
+        Returns:
+            list[schemas.CMSection]: 検出された CM 区間のリスト
+        """
+
+        # CM の標準的な長さ (秒)
+        CM_DURATIONS = [15.0, 30.0, 60.0, 90.0]
+        # CM 長との一致判定に使う許容誤差 (秒)
+        # 無音区間の中間点を使うため、多少のずれが生じる
+        TOLERANCE = 1.5
+
+        # 各セグメントが CM の長さに一致するかどうかを判定する
+        is_cm_duration: list[bool] = []
+        for seg_start, seg_end in segments:
+            duration = seg_end - seg_start
+            # いずれかの CM 標準長に許容誤差以内で一致するか判定
+            matches = any(abs(duration - cm_dur) <= TOLERANCE for cm_dur in CM_DURATIONS)
+            is_cm_duration.append(matches)
+
+        # CM 長に一致するセグメントが連続している区間 (ラン) を検出する
+        # 連続数が 2 以上のランを CM ブロックとして採用する
+        cm_sections: list[schemas.CMSection] = []
+        i = 0
+        while i < len(segments):
+            if is_cm_duration[i]:
+                # CM 長セグメントの連続区間の開始
+                run_start = i
+                # 連続する CM 長セグメントを数える
+                while i < len(segments) and is_cm_duration[i]:
+                    i += 1
+                run_end = i  # run_end は排他的 (最後の CM 長セグメントのインデックス + 1)
+                run_length = run_end - run_start
+
+                # 2つ以上連続している場合のみ CM ブロックとして採用する
+                # 本編中にたまたま 30秒ぴったりのセグメントが1つだけ存在することはあり得るが、
+                # 2つ以上連続するのは CM ブロックの特徴的なパターン
+                if run_length >= 2:
+                    cm_block_start = segments[run_start][0]
+                    cm_block_end = segments[run_end - 1][1]
+
+                    # CM ブロックの合計時間が最低 30秒以上であることを確認する
+                    # 15秒 CM が 2つ連続しただけでも 30秒になるため、このしきい値は保守的
+                    cm_block_duration = cm_block_end - cm_block_start
+                    if cm_block_duration >= 30.0:
+                        cm_sections.append(schemas.CMSection(
+                            start_time=round(cm_block_start, 3),
+                            end_time=round(cm_block_end, 3),
+                        ))
+            else:
+                i += 1
+
+        # 動画の先頭付近 (最初の5秒以内に開始) の CM ブロックは除外する
+        # 番組冒頭のジングルや提供クレジットが CM として誤検出されることがあるため
+        # ただし、録画開始直後から CM が始まっているケースもあるため、
+        # CM ブロックの長さが 60秒以上であれば残す (短い誤検出だけ除外)
+        if cm_sections and cm_sections[0]['start_time'] < 5.0:
+            first_block_duration = cm_sections[0]['end_time'] - cm_sections[0]['start_time']
+            if first_block_duration < 60.0:
+                cm_sections = cm_sections[1:]
+
+        # 動画の末尾付近 (最後の5秒以内に終了) の CM ブロックも同様に処理する
+        if cm_sections and (self.duration_sec - cm_sections[-1]['end_time']) < 5.0:
+            last_block_duration = cm_sections[-1]['end_time'] - cm_sections[-1]['start_time']
+            if last_block_duration < 60.0:
+                cm_sections = cm_sections[:-1]
+
+        return cm_sections
 
 
     async def __detectFromChapterFile(self) -> list[schemas.CMSection] | None:
