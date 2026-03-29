@@ -1038,6 +1038,9 @@ class ThumbnailGenerator:
         scoring_width, scoring_height = self.SCORING_SCALE
 
         # サムネイル情報を DB に保存
+        # update_fields を指定して thumbnail_info フィールドのみを更新することで、
+        # KeyFrameAnalyzer や CMSectionsDetector と同時実行した際に
+        # 互いのフィールドを上書きしてしまうレースコンディションを防ぐ
         db_recorded_video.thumbnail_info = schemas.ThumbnailInfo(
             version = self.THUMBNAIL_INFO_VERSION,
             representative = schemas.ThumbnailImageInfo(
@@ -1057,7 +1060,7 @@ class ThumbnailGenerator:
                 interval_sec = self.tile_interval_sec,
             ),
         )
-        await db_recorded_video.save()
+        await db_recorded_video.save(update_fields=['thumbnail_info'])
 
 
     async def migrateFromLegacyTile(self) -> bool:

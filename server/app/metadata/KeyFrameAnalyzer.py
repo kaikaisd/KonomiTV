@@ -189,8 +189,11 @@ class KeyFrameAnalyzer:
             db_recorded_video = await RecordedVideo.get_or_none(file_path=str(self.file_path))
             if db_recorded_video is not None:
                 # キーフレーム情報を更新
+                # update_fields を指定して key_frames フィールドのみを更新することで、
+                # CMSectionsDetector や ThumbnailGenerator と同時実行した際に
+                # 互いのフィールドを上書きしてしまうレースコンディションを防ぐ
                 db_recorded_video.key_frames = key_frames
-                await db_recorded_video.save()
+                await db_recorded_video.save(update_fields=['key_frames'])
                 logging.info(f'{self.file_path}: Keyframe analysis completed. ({len(key_frames)} keyframes found / {time.time() - start_time:.2f} sec)')
             else:
                 logging.warning(f'{self.file_path}: RecordedVideo record not found.')

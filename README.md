@@ -49,9 +49,14 @@ EDCB を使わず、Mirakurun バックエンドのみで録画予約が行え�
 - 使用率に応じて色が変化: 通常（プライマリ）→ 75% 以上（警告黄）→ 90% 以上（エラー赤）
 - `GET /api/videos/storage` エンドポイントから取得し、ページロード時に並行実行で取得
 
-### 4. Cloudflare Access ログアウト
+### 4. Cloudflare Access 連携
 
-ボタンをクリックして、`/cdn-cgi/access/logout` をリクエストする。
+Cloudflare Access 環境向けの再認証・ログアウトボタンを複数箇所に追加しました。
+
+- **マイページ**: CF Access 再認証・ログアウトボタン（セッション切れ時の再認証フロー対応）
+- **視聴画面ナビ**: テレビ視聴・録画再生中にナビゲーションから直接 CF Access の再認証・ログアウトが可能
+- **グローバルバナー**: CF Access セッション切れを検出した際に再認証を促すバナーを全画面に表示
+- セッション切れの検出は `/cdn-cgi/access/get-identity` の HTTP ステータスで行い、`/cdn-cgi/access/logout` で Cloudflare Access のセッションを無効化
 
 ### 5. Docker によるコードチェック環境
 
@@ -72,15 +77,38 @@ docker compose -f docker-compose.check.yaml run --rm check
 
 ### 6. バッチエンコードキュー
 
-Amatsukaze に着想を得た、録画 TS ファイルの MP4 へのバッチトランスコード機能を追加しました。ナビゲーションの「エンコード」からアクセスできます。
+Amatsukaze に着想を得た、録画ファイルのバッチトランスコード機能を追加しました。ナビゲーションの「エンコード」からアクセスできます。設定は 設定 → エンコード設定 から管理できます。
+
+#### キュー管理
 
 - **キュー管理**: 録画番組をエンコードキューに追加し、優先度順に自動処理
 - **リアルタイム進捗表示**: SSE (Server-Sent Events) による進捗率のリアルタイム更新
-- **複数エンコーダー対応**: FFmpeg / QSVEncC / NVEncC / VCEEncC / rkmppenc から選択可能
-- **コーデック選択**: H.264 / H.265 から選択可能
 - **タスク操作**: キャンセル・リトライ・削除・優先度変更をサポート
 - **ステータス管理**: Pending (待機中) → Encoding (エンコード中) → Completed (完了) / Failed (失敗) / Cancelled (キャンセル)
 - **サマリーダッシュボード**: ステータスごとの件数をカード形式で表示
+- **コンテキストメニュー**: 録画番組一覧の右クリックメニューから直接エンコードキューに追加可能
+
+#### エンコードプロファイル
+
+Amatsukaze のプロファイルと同様に、用途別の設定セットを複数作成・管理できます。プロファイルはエンコードキューへの追加時に選択します。
+
+| 設定項目 | 選択肢 |
+|---------|--------|
+| **エンコーダー** | FFmpeg / QSVEncC / NVEncC / VCEEncC / rkmppenc |
+| **出力コンテナ形式** | MP4（汎用性最高）/ MKV（多コーデック・障害耐性）/ WebM（Web 向け VP9/AV1） |
+| **映像コーデック** | H.264 / H.265 |
+| **品質プリセット** | ultrafast〜veryslow（エンコーダー標準プリセット名） |
+| **映像ビットレート** | 任意指定（例: `4000k`） |
+| **音声ビットレート** | 任意指定（例: `192k`） |
+| **CM 処理モード** | None（CM そのまま）/ Remove（CM 除去・本編のみ出力）/ SeparateOutput（本編と CM を別ファイルに分離） |
+| **CM 映像ビットレート** | SeparateOutput 時の CM ファイル用ビットレート（省略時は映像ビットレートと同じ） |
+
+#### CM 区間検出
+
+- 録画ファイルのバックグラウンド解析時に CM 区間を自動検出し DB に保存
+- `.chapter.txt` が存在する場合はそれを使用、ない場合は FFmpeg の音声エネルギー解析で自動検出
+- CM 除去・分離出力は検出済み CM 区間を用いて `filter_complex trim` で実行
+- 録画完了後に未解析の場合は、エンコード実行時にオンデマンドで検出
 
 ### 7. Telegram 録画完了通知
 
@@ -172,24 +200,30 @@ Telegram の **HTML モード**で送信されるメッセージ本文を自由�
 
 | ファイル | 変更内容 |
 |---------|---------|
-| `server/app/config.py` | `ConfigFileWatcher` クラス追加・`ReadCurrentConfig()` バグ修正・`SaveConfig()` のインメモリ即時反映 |
+| `server/app/config.py` | `ConfigFileWatcher` クラス追加・`ReadCurrentConfig()` バグ修正・`SaveConfig()` のインメモリ即時反映・`filename_format` 保存時 YAML 折り返し修正 |
 | `server/app/app.py` | `ConfigFileWatcher` の起動・停止をサーバーライフサイクルに登録 |
 | `server/app/utils/TelegramNotifier.py` | **[新規]** Telegram 通知送信クラス（サムネイル添付・HTML テンプレート対応） |
 | `server/app/routers/SettingsRouter.py` | Telegram テスト通知 API・テンプレート検証 API の追加 |
-| `config.example.yaml` | `telegram_notification_template` フィールドの追加とコメント整備 |
+| `config.example.yaml` | `telegram_notification_template`・エンコード設定セクションの追加とコメント整備 |
 | `server/app/migrations/models/10_*.py` | **[新規]** Mirakurun 録画予約 DB マイグレーション |
 | `server/app/models/MirakurunReservation.py` | **[新規]** Mirakurun 録画予約モデル |
 | `server/app/models/MirakurunRecordingRule.py` | **[新規]** キーワード自動予約ルールモデル |
 | `server/app/recording/` | **[新規]** Mirakurun 録画エンジン（予約管理・録画開始/停止） |
 | `server/app/models/EncodingTask.py` | **[新規]** バッチエンコードタスク DB モデル |
-| `server/app/encoding/EncodingQueueManager.py` | **[新規]** エンコードキューマネージャー（バックグラウンドタスク） |
+| `server/app/encoding/EncodingQueueManager.py` | **[新規]** エンコードキューマネージャー（プロファイル管理・CM 処理・SeparateOutput 対応） |
 | `server/app/routers/EncodingTasksRouter.py` | **[新規]** エンコードタスク CRUD + SSE API |
 | `server/app/migrations/models/12_*.py` | **[新規]** エンコードタスク DB マイグレーション |
+| `server/app/migrations/models/13_*.py` | **[新規]** エンコードプロファイル設定 DB マイグレーション |
+| `server/app/migrations/models/14_*.py` | **[新規]** CM処理モード拡張 DB マイグレーション |
 | `server/app/routers/ReservationsRouter.py` | Mirakurun 録画予約 CRUD API の追加 |
 | `server/app/routers/ReservationConditionsRouter.py` | **[新規]** 自動予約ルール CRUD API |
 | `server/app/routers/ProgramsRouter.py` | 番組検索 API に Mirakurun バックエンド対応を追加 |
 | `server/app/routers/VideosRouter.py` | `GET /api/videos/storage` エンドポイントを追加（ディスク単位重複排除・使用量集計）|
-| `server/app/schemas.py` | `FolderStorageInfo`・`StorageInfo` モデルを追加 |
+| `server/app/schemas.py` | `FolderStorageInfo`・`StorageInfo`・エンコードプロファイル関連スキーマを追加 |
+| `server/app/metadata/CMSectionsDetector.py` | FFmpeg 音声エネルギー解析による CM 検出・`save(update_fields)` によるレースコンディション修正 |
+| `server/app/metadata/KeyFrameAnalyzer.py` | `save(update_fields)` によるレースコンディション修正 |
+| `server/app/metadata/ThumbnailGenerator.py` | `save(update_fields)` によるレースコンディション修正 |
+| `server/app/metadata/RecordedScanTask.py` | 録画中視聴時の解析スキップ競合バグを修正 |
 
 ### クライアント側 (TypeScript / Vue)
 
@@ -200,12 +234,17 @@ Telegram の **HTML モード**で送信されるメッセージ本文を自由�
 | `client/src/views/Videos/Home.vue` | ストレージ使用量バーを追加（使用率に応じた警告色変化） |
 | `client/src/services/Videos.ts` | `IFolderStorageInfo`・`IStorageInfo` インターフェースと `fetchStorageInfo()` を追加 |
 | `client/src/views/Settings/Notification.vue` | **[新規]** Telegram 通知設定ページ（テンプレートプレビュー UI 含む） |
-| `client/src/services/Settings.ts` | `validateTelegramTemplate()` メソッド追加・通知設定フィールドの追加 |
+| `client/src/views/Settings/Encoding.vue` | **[新規]** エンコード設定ページ（プロファイル追加・編集・削除 UI） |
+| `client/src/views/Settings/Base.vue` | エンコード設定へのナビゲーションリンクを追加 |
+| `client/src/services/Settings.ts` | `validateTelegramTemplate()` メソッド追加・通知設定・エンコード設定フィールドの追加 |
 | `client/src/services/Reservations.ts` | 録画予約 API クライアント |
 | `client/src/services/ReservationConditions.ts` | 自動予約ルール API クライアント |
 | `client/src/services/EncodingTasks.ts` | **[新規]** エンコードタスク API クライアント |
-| `client/src/views/Encoding/Home.vue` | **[新規]** エンコードキュー表示ページ（SSE リアルタイム更新） |
+| `client/src/views/Encoding/Home.vue` | **[新規]** エンコードキュー表示ページ（SSE リアルタイム更新・プロファイル選択ダイアログ） |
 | `client/src/components/Navigation.vue` | 予約メニュー項目・エンコードメニュー項目の追加 |
+| `client/src/components/Watch/Navigation.vue` | 視聴画面に CF Access 再認証・ログアウトボタンを追加 |
+| `client/src/components/Videos/RecordedProgram.vue` | コンテキストメニューに「エンコードキューに追加」を追加 |
+| `client/src/router/index.ts` | エンコードキュー・エンコード設定ページのルート追加 |
 | `client/src/stores/VersionStore.ts` | バージョン情報ストアの更新 |
 
 </details>

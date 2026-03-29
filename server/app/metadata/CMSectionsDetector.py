@@ -69,8 +69,11 @@ class CMSectionsDetector:
             if db_recorded_video is not None:
                 # CM 区間情報を更新
                 # 検出できなかった場合も必ず [] を設定する
+                # update_fields を指定して cm_sections フィールドのみを更新することで、
+                # KeyFrameAnalyzer や ThumbnailGenerator と同時実行した際に
+                # 互いのフィールドを上書きしてしまうレースコンディションを防ぐ
                 db_recorded_video.cm_sections = cm_sections
-                await db_recorded_video.save()
+                await db_recorded_video.save(update_fields=['cm_sections'])
                 if len(cm_sections) > 0:
                     logging.info(f'{self.file_path}: Saved {len(cm_sections)} CM sections. ({time.time() - start_time:.2f} sec)')
                 else:

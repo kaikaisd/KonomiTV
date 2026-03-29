@@ -624,7 +624,12 @@ def SaveConfig(config: ServerSettings) -> None:
     yaml = ruamel.yaml.YAML()
     yaml.default_flow_style = None  # None を使うと、スカラー以外のものはブロックスタイルになる
     yaml.preserve_quotes = True
-    yaml.width = 20
+    # yaml.width を大きく設定して文字列値が自動折り返しされないようにする
+    # デフォルト (80) や小さい値だと filename_format などの長い文字列がシングルクォートスカラーとして
+    # 複数行に折り返され、読み戻し時に折り返し位置にスペースが挿入されて値が破損する
+    # (YAML 仕様上、単一引用符スカラーの改行はスペースに畳み込まれるため)
+    # recorded_folders などのフローシーケンスの整形は transform 関数側で行うため、width は無関係
+    yaml.width = 4096
     # mapping=4: 辞書キーのインデント幅 (encoding: → output_directory: など)
     # sequence=6: シーケンス要素のコンテンツインデント幅 (profiles: → name: のインデント量)
     # offset=4: シーケンスのダッシュ "-" のオフセット (profiles: から "-" までのスペース数)
