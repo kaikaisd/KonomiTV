@@ -182,7 +182,9 @@ const is_loading = ref(true);
 const autoRefreshInterval = ref<number | null>(null);
 
 // 自動更新の間隔 (ミリ秒)
-const AUTO_REFRESH_INTERVAL = 30 * 1000;  // 30秒
+// 解析中の番組がある場合は短い間隔でポーリングし、解析完了を素早く検出する
+const AUTO_REFRESH_INTERVAL = 30 * 1000;         // 30秒 (通常)
+const ANALYZING_REFRESH_INTERVAL = 5 * 1000;     // 5秒  (解析中の番組がある場合)
 
 // マイリストの変更を監視して即座に再取得
 const settingsStore = useSettingsStore();
@@ -286,6 +288,19 @@ const sectionUpdaters = {
     watchedPrograms: fetchWatchedPrograms,
 } as const;
 
+// 現在表示中のいずれかの番組がバックグラウンド解析中かどうかを返す
+// has_key_frames が false かつ AnalysisFailed でない場合、解析がまだ完了していない
+const hasAnalyzingPrograms = () => {
+    const allPrograms = [
+        ...recent_programs.value,
+        ...mylist_programs.value,
+        ...watched_programs.value,
+    ];
+    return allPrograms.some(
+        p => !p.recorded_video.has_key_frames && p.recorded_video.status !== 'AnalysisFailed',
+    );
+};
+
 // 全セクションの更新を実行
 const updateAllSections = async () => {
     try {
@@ -301,6 +316,14 @@ const updateAllSections = async () => {
         console.error('Failed to update sections:', error);
         is_loading.value = false;
     }
+
+    // 解析中の番組がある場合は短い間隔でポーリングし解析完了を素早く検出する。
+    // ない場合は通常間隔に戻す。interval が変わる場合のみ再設定する。
+    if (autoRefreshInterval.value !== null) {
+        const nextInterval = hasAnalyzingPrograms() ? ANALYZING_REFRESH_INTERVAL : AUTO_REFRESH_INTERVAL;
+        clearInterval(autoRefreshInterval.value);
+        autoRefreshInterval.value = window.setInterval(updateAllSections, nextInterval);
+    }
 };
 
 // 自動更新を開始
@@ -308,7 +331,7 @@ const startAutoRefresh = () => {
     if (autoRefreshInterval.value === null) {
         // 初回更新
         updateAllSections();
-        // 定期更新を開始
+        // 定期更新を開始 (updateAllSections 内で解析状態に応じて間隔を再設定する)
         autoRefreshInterval.value = window.setInterval(updateAllSections, AUTO_REFRESH_INTERVAL);
     }
 };

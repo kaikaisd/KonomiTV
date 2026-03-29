@@ -256,6 +256,21 @@ def Updater(version: str) -> None:
         if result is False:
             return  # 処理中断
 
+        # latest (開発版) の場合は、リモートの最新コミットにリセットする
+        ## git checkout --force custom-features はローカルブランチに切り替えるだけで、
+        ## リモートの新しいコミットは反映されない。git reset --hard origin/custom-features で
+        ## ローカルブランチをリモートの最新コミットに強制一致させる。
+        if version == 'latest':
+            result = RunSubprocess(
+                'KonomiTV のソースコードをリモートの最新版に合わせています…',
+                ['git', 'reset', '--hard', 'origin/custom-features'],
+                cwd = update_path,
+                error_message = 'KonomiTV のソースコードのリセット中に予期しないエラーが発生しました。',
+                error_log_name = 'Git のエラーログ',
+            )
+            if result is False:
+                return  # 処理中断
+
     # Git を使ってインストールされていない場合: zip からソースコードを更新
     else:
 
