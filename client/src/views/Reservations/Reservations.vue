@@ -12,40 +12,48 @@
                         { name: '録画予約一覧', path: '/reservations/all', disabled: true },
                     ]" />
 
-                    <!-- 水平分割レイアウト：左=カンバン / 右=リスト -->
-                    <div class="reservations-all-container__split">
+                    <!-- 自動予約ルールへのリンクカード -->
+                    <v-card class="reservations-all-container__rule-card mb-4" elevation="1"
+                        @click="$router.push('/reservations/conditions')" style="cursor: pointer;">
+                        <v-card-text class="reservations-all-container__rule-card-content">
+                            <Icon icon="fluent:tag-20-regular" width="26px"
+                                class="reservations-all-container__rule-card-icon" />
+                            <div class="reservations-all-container__rule-card-text">
+                                <div class="reservations-all-container__rule-card-title">自動予約ルール</div>
+                                <div class="reservations-all-container__rule-card-sub">
+                                    キーワードを指定して番組を自動的に録画予約するルールを管理します。
+                                </div>
+                            </div>
+                            <Icon icon="fluent:chevron-right-20-regular" width="20px"
+                                class="reservations-all-container__rule-card-arrow" />
+                        </v-card-text>
+                    </v-card>
 
-                        <!-- 左パネル：週間カンバンボード -->
-                        <div class="reservations-all-container__kanban-panel">
-                            <h2 class="reservations-all-container__panel-title">
-                                週間カレンダー
-                            </h2>
-                            <ReservationKanbanBoard
-                                :reservations="allReservations"
-                                :isLoading="isLoading"
-                                @clickReservation="openDetail" />
-                        </div>
+                    <!-- 週間カンバンボード -->
+                    <h2 class="reservations-all-container__section-title">週間カレンダー</h2>
+                    <ReservationKanbanBoard
+                        class="mb-6"
+                        :reservations="allReservations"
+                        :isLoading="isLoading"
+                        @clickReservation="openDetail" />
 
-                        <!-- 区切り線 -->
-                        <div class="reservations-all-container__divider"></div>
+                    <!-- 区切り線 -->
+                    <div class="reservations-all-container__divider"></div>
 
-                        <!-- 右パネル：予約リスト -->
-                        <div class="reservations-all-container__list-panel">
-                            <ReservationList ref="reservationList"
-                                title="録画予約一覧"
-                                :reservations="reservations"
-                                :total="total"
-                                :page="page"
-                                :sort-order="sortOrder"
-                                :is-loading="isLoading"
-                                :show-back-button="false"
-                                :show-empty-message="!isLoading"
-                                @update:page="updatePage"
-                                @update:sort-order="updateSortOrder"
-                                @delete="handleReservationDeleted">
-                            </ReservationList>
-                        </div>
-                    </div>
+                    <!-- 予約リスト -->
+                    <ReservationList ref="reservationList"
+                        title="録画予約一覧"
+                        :reservations="reservations"
+                        :total="total"
+                        :page="page"
+                        :sort-order="sortOrder"
+                        :is-loading="isLoading"
+                        :show-back-button="false"
+                        :show-empty-message="!isLoading"
+                        @update:page="updatePage"
+                        @update:sort-order="updateSortOrder"
+                        @delete="handleReservationDeleted">
+                    </ReservationList>
                 </div>
             </div>
         </main>
@@ -246,6 +254,8 @@ onUnmounted(() => { stopAutoRefresh(); });
     width: 100%;
     height: 100%;
     padding: 20px;
+    margin: 0 auto;
+    max-width: 1200px;
     @include smartphone-horizontal {
         padding: 16px 20px !important;
     }
@@ -257,8 +267,46 @@ onUnmounted(() => { stopAutoRefresh(); });
         padding-top: 8px !important;
     }
 
-    // パネルタイトル（カンバン側の「週間カレンダー」ラベル）
-    &__panel-title {
+    // 自動予約ルールリンクカード
+    &__rule-card {
+        background: rgb(var(--v-theme-background-lighten-2)) !important;
+
+        &-content {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 12px 16px !important;
+        }
+
+        &-icon {
+            flex-shrink: 0;
+            color: rgb(var(--v-theme-primary));
+        }
+
+        &-text {
+            flex: 1;
+            min-width: 0;
+        }
+
+        &-title {
+            font-size: 0.9rem;
+            font-weight: bold;
+        }
+
+        &-sub {
+            font-size: 0.78rem;
+            color: rgb(var(--v-theme-text-darken-1));
+            margin-top: 2px;
+        }
+
+        &-arrow {
+            flex-shrink: 0;
+            color: rgb(var(--v-theme-text-darken-1));
+        }
+    }
+
+    // セクションタイトル（週間カレンダー）
+    &__section-title {
         font-size: 20px;
         font-weight: 700;
         padding-top: 4px;
@@ -266,94 +314,18 @@ onUnmounted(() => { stopAutoRefresh(); });
         @include smartphone-vertical {
             font-size: 18px;
             padding-bottom: 8px;
+            padding-left: 8px;
         }
     }
 
-    // 水平分割レイアウト
-    &__split {
-        display: flex;
-        flex-direction: row;
-        align-items: flex-start;
-        gap: 0;
-        width: 100%;
-        min-width: 0;
-
-        // タブレット縦画面以下は縦積みに切り替える
-        @include tablet-vertical {
-            flex-direction: column;
-        }
-        @include smartphone-horizontal {
-            flex-direction: column;
-        }
-        @include smartphone-vertical {
-            flex-direction: column;
-        }
-    }
-
-    // 左：カンバンパネル（画面の広い方をカンバンに割り当てる）
-    &__kanban-panel {
-        flex: 1 1 0;
-        min-width: 0;
-        padding-right: 20px;
-        @include tablet-vertical {
-            padding-right: 0;
-            padding-bottom: 24px;
-            width: 100%;
-        }
-        @include smartphone-horizontal {
-            padding-right: 0;
-            padding-bottom: 20px;
-            width: 100%;
-        }
-        @include smartphone-vertical {
-            padding-right: 0;
-            padding-bottom: 20px;
-            width: 100%;
-        }
-    }
-
-    // 区切り線（縦方向）
+    // カンバンとリストの間の水平区切り線
     &__divider {
-        flex: 0 0 1px;
-        align-self: stretch;
+        width: 100%;
+        height: 1px;
         background: rgb(var(--v-theme-background-lighten-2));
-        margin: 0 4px;
-        @include tablet-vertical {
-            display: none;
-        }
-        @include smartphone-horizontal {
-            display: none;
-        }
+        margin: 4px 0 28px;
         @include smartphone-vertical {
-            display: none;
-        }
-    }
-
-    // 右：リストパネル（固定幅）
-    &__list-panel {
-        flex: 0 0 400px;
-        min-width: 0;
-        padding-left: 20px;
-        @include desktop {
-            flex: 0 0 420px;
-        }
-        @include tablet-horizontal {
-            flex: 0 0 360px;
-        }
-        @include tablet-vertical {
-            padding-left: 0;
-            flex: unset;
-            width: 100%;
-        }
-        @include smartphone-horizontal {
-            padding-left: 0;
-            flex: unset;
-            width: 100%;
-        }
-        @include smartphone-vertical {
-            padding-left: 0;
-            flex: unset;
-            width: 100%;
+            margin: 4px 0 20px;
         }
     }
 }
