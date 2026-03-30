@@ -145,6 +145,9 @@ class MirakurunRuleMatchTask:
         elif condition.broadcast_type == 'PaidOnly':
             free_where = 'AND p.is_free = 0'
 
+        # end_time > now を下限に使うことで、既に放送開始済みだがまだ終了していない番組も対象に含める。
+        # start_time > now を使うと、EPG データの到着遅延やスキャン間隔 (5分) の隙間で
+        # 放送開始直後の番組がマッチ対象から漏れ、録画が作成されない問題を防ぐ。
         query = f"""
             SELECT
                 p.id, p.channel_id, p.network_id, p.service_id, p.event_id,
@@ -152,7 +155,7 @@ class MirakurunRuleMatchTask:
                 p.start_time, p.end_time, p.duration, p.is_free
             FROM programs p
             WHERE
-                p.start_time > ?
+                p.end_time > ?
                 AND p.start_time < ?
                 {service_where}
                 {duration_where}
