@@ -113,10 +113,12 @@ class MirakurunRecordingTask:
         """
         スケジューラーのメインループ。
         30 秒ごとに Pending な予約を確認し、開始時刻が近いものの録画を開始する。
+        また、end_time を過ぎても Pending のままの「録画ミス」予約を検出して通知する。
         """
         while True:
             try:
                 await self._checkAndStartRecordings()
+                await self._handleMissedRecordings()
             except Exception:
                 logging.error('MirakurunRecordingTask: Unexpected error in scheduler loop.', exc_info=True)
             # 30 秒待機してから再チェック
@@ -157,6 +159,74 @@ class MirakurunRecordingTask:
                 f'MirakurunRecordingTask: Scheduled recording task for reservation_id={reservation.id} '
                 f'(title="{reservation.title}", start_time={reservation.start_time.isoformat()}).'
             )
+
+    async def _handleMissedRecordings(self) -> None:
+        """
+        end_time を過ぎても Pending のままになっている予約 (録画ミス) を検出する。
+        該当予約のステータスを Failed に更新し、Telegram 通知設定が有効な場合は
+        「録画ミス」通知を送信する。
+        """
+        now = datetime.now(tz=JST)
+
+        # end_time が現在時刻より前で、かつ Pending のまま残っている予約を取得する。
+        # Recording 状態のものは _recordStream が終了時に Completed / Failed へ遷移させるので除外する。
+        missed: list[MirakurunReservation] = await MirakurunReservation.filter(
+            status='Pending',
+            end_time__lt=now,
+        ).all()
+
+        if not missed:
+            return
+
+        cfg = ReadCurrentConfig().notification
+        should_notify = (
+            cfg.telegram_notification_enabled
+            and bool(cfg.telegram_bot_token)
+            and bool(cfg.telegram_chat_id)
+        )
+
+        for reservation in missed:
+            logging.warning(
+                f'MirakurunRecordingTask: Missed recording detected for reservation_id={reservation.id} '
+                f'(title="{reservation.title}", end_time={reservation.end_time.isoformat()}).'
+            )
+
+            # ステータスを Failed に更新する
+            reservation.status = 'Failed'  # type: ignore[assignment]
+            await reservation.save()
+
+            if not should_notify:
+                continue
+
+            # チャンネル名を取得する (存在しない場合は None のまま通知する)
+            channel_name_display: str | None = None
+            if reservation.channel_id:
+                from app.models.Channel import Channel
+                channel = await Channel.get_or_none(id=reservation.channel_id)
+                if channel:
+                    channel_name_display = channel.name
+
+            # 放送日時を JST 文字列に変換する
+            start_jst = reservation.start_time.astimezone(JST)
+            end_jst = reservation.end_time.astimezone(JST)
+            duration_min = max(1, int((reservation.end_time - reservation.start_time).total_seconds() / 60))
+
+            # 通知タスクを非同期で起動する (スケジューラーループをブロックしない)
+            notification_task = asyncio.create_task(
+                TelegramNotifier.sendMissedRecordingNotification(
+                    bot_token = cfg.telegram_bot_token,
+                    chat_id = cfg.telegram_chat_id,
+                    title = reservation.title,
+                    channel_name = channel_name_display,
+                    date_jst = start_jst.strftime('%Y/%m/%d'),
+                    start_time_jst = start_jst.strftime('%H:%M'),
+                    end_time_jst = end_jst.strftime('%H:%M'),
+                    duration_min = duration_min,
+                ),
+                name = f'MirakurunMissedNotification-{reservation.id}',
+            )
+            MirakurunRecordingTask._notification_tasks.add(notification_task)
+            notification_task.add_done_callback(MirakurunRecordingTask._notification_tasks.discard)
 
     async def _recordStream(self, reservation_id: int) -> None:
         """
