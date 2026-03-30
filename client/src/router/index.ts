@@ -82,6 +82,11 @@ const router = createRouter({
             component: () => import('@/views/Reservations/ReservationConditions.vue'),
         },
         {
+            path: '/reservations/week',
+            name: 'Reservations Week',
+            component: () => import('@/views/Reservations/WeekKanban.vue'),
+        },
+        {
             path: '/encoding/',
             name: 'Encoding',
             component: () => import('@/views/Encoding/Home.vue'),

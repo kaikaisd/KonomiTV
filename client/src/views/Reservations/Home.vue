@@ -10,22 +10,41 @@
                         { name: 'ホーム', path: '/' },
                         { name: '録画予約', path: '/reservations/', disabled: true },
                     ]" />
-                    <!-- 自動予約ルール管理へのリンクカード -->
-                    <v-card class="reservations-home-container__conditions-card mb-5" elevation="1"
-                        @click="$router.push('/reservations/conditions')" style="cursor: pointer;">
-                        <v-card-text class="reservations-home-container__conditions-card-content">
-                            <Icon icon="fluent:tag-20-regular" width="28px"
-                                class="reservations-home-container__conditions-card-icon" />
-                            <div class="reservations-home-container__conditions-card-text">
-                                <div class="reservations-home-container__conditions-card-title">自動予約ルール</div>
-                                <div class="reservations-home-container__conditions-card-sub">
-                                    キーワードを指定して番組を自動的に録画予約するルールを管理します。
+                    <!-- クイックアクションカード行：週間カレンダーと自動予約ルール -->
+                    <div class="reservations-home-container__quick-cards mb-5">
+                        <!-- 週間カレンダーへのリンクカード -->
+                        <v-card class="reservations-home-container__quick-card" elevation="1"
+                            @click="$router.push('/reservations/week')" style="cursor: pointer;">
+                            <v-card-text class="reservations-home-container__quick-card-content">
+                                <Icon icon="fluent:calendar-week-numbers-20-regular" width="28px"
+                                    class="reservations-home-container__quick-card-icon" />
+                                <div class="reservations-home-container__quick-card-text">
+                                    <div class="reservations-home-container__quick-card-title">週間カレンダー</div>
+                                    <div class="reservations-home-container__quick-card-sub">
+                                        週ごとの録画予約をカンバン形式で確認できます。
+                                    </div>
                                 </div>
-                            </div>
-                            <Icon icon="fluent:chevron-right-20-regular" width="20px"
-                                class="reservations-home-container__conditions-card-arrow" />
-                        </v-card-text>
-                    </v-card>
+                                <Icon icon="fluent:chevron-right-20-regular" width="20px"
+                                    class="reservations-home-container__quick-card-arrow" />
+                            </v-card-text>
+                        </v-card>
+                        <!-- 自動予約ルール管理へのリンクカード -->
+                        <v-card class="reservations-home-container__quick-card" elevation="1"
+                            @click="$router.push('/reservations/conditions')" style="cursor: pointer;">
+                            <v-card-text class="reservations-home-container__quick-card-content">
+                                <Icon icon="fluent:tag-20-regular" width="28px"
+                                    class="reservations-home-container__quick-card-icon" />
+                                <div class="reservations-home-container__quick-card-text">
+                                    <div class="reservations-home-container__quick-card-title">自動予約ルール</div>
+                                    <div class="reservations-home-container__quick-card-sub">
+                                        キーワードを指定して番組を自動的に録画予約するルールを管理します。
+                                    </div>
+                                </div>
+                                <Icon icon="fluent:chevron-right-20-regular" width="20px"
+                                    class="reservations-home-container__quick-card-arrow" />
+                            </v-card-text>
+                        </v-card>
+                    </div>
 
                     <!-- 放送が近い録画予約セクション -->
                     <ReservationList
@@ -189,7 +208,18 @@ onUnmounted(() => {
 
 
 
-    &__conditions-card {
+    // 週間カレンダー・自動予約ルールのクイックアクションカード行
+    &__quick-cards {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        @include smartphone-vertical {
+            grid-template-columns: 1fr;
+            gap: 8px;
+        }
+    }
+
+    &__quick-card {
         background: rgb(var(--v-theme-background-lighten-2)) !important;
 
         &-content {
