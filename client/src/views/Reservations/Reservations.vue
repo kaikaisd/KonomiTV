@@ -11,22 +11,51 @@
                         { name: '録画予約', path: '/reservations/' },
                         { name: '録画予約一覧', path: '/reservations/all', disabled: true },
                     ]" />
-                    <ReservationList ref="reservationList"
-                        title="録画予約一覧"
-                        :reservations="reservations"
-                        :total="total"
-                        :page="page"
-                        :sort-order="sortOrder"
-                        :is-loading="isLoading"
-                        :show-back-button="true"
-                        :show-empty-message="!isLoading"
-                        @update:page="updatePage"
-                        @update:sort-order="updateSortOrder"
-                        @delete="handleReservationDeleted">
-                    </ReservationList>
+
+                    <!-- 水平分割レイアウト：左=カンバン / 右=リスト -->
+                    <div class="reservations-all-container__split">
+
+                        <!-- 左パネル：週間カンバンボード -->
+                        <div class="reservations-all-container__kanban-panel">
+                            <h2 class="reservations-all-container__panel-title">
+                                週間カレンダー
+                            </h2>
+                            <ReservationKanbanBoard
+                                :reservations="allReservations"
+                                :isLoading="isLoading"
+                                @clickReservation="openDetail" />
+                        </div>
+
+                        <!-- 区切り線 -->
+                        <div class="reservations-all-container__divider"></div>
+
+                        <!-- 右パネル：予約リスト -->
+                        <div class="reservations-all-container__list-panel">
+                            <ReservationList ref="reservationList"
+                                title="録画予約一覧"
+                                :reservations="reservations"
+                                :total="total"
+                                :page="page"
+                                :sort-order="sortOrder"
+                                :is-loading="isLoading"
+                                :show-back-button="false"
+                                :show-empty-message="!isLoading"
+                                @update:page="updatePage"
+                                @update:sort-order="updateSortOrder"
+                                @delete="handleReservationDeleted">
+                            </ReservationList>
+                        </div>
+                    </div>
                 </div>
             </div>
         </main>
+
+        <!-- 録画予約詳細ドロワー（カンバンカードクリック時に使用） -->
+        <ReservationDetailDrawer
+            v-model="drawerOpen"
+            :reservation="selectedReservation"
+            @deleted="handleDrawerDeleted"
+            @updated="handleDrawerUpdated" />
     </div>
 </template>
 <script lang="ts" setup>
@@ -37,6 +66,8 @@ import { useRoute, useRouter } from 'vue-router';
 import Breadcrumbs from '@/components/Breadcrumbs.vue';
 import HeaderBar from '@/components/HeaderBar.vue';
 import Navigation from '@/components/Navigation.vue';
+import ReservationDetailDrawer from '@/components/Reservations/ReservationDetailDrawer.vue';
+import ReservationKanbanBoard from '@/components/Reservations/ReservationKanbanBoard.vue';
 import ReservationList from '@/components/Reservations/ReservationList.vue';
 import SPHeaderBar from '@/components/SPHeaderBar.vue';
 import Reservations, { IReservation } from '@/services/Reservations';
@@ -44,28 +75,24 @@ import Reservations, { IReservation } from '@/services/Reservations';
 const route = useRoute();
 const router = useRouter();
 
-// 録画予約リスト
-const reservations = ref<IReservation[]>([]);
-// 全体の録画予約数
-const total = ref<number>(0);
-// 現在のページ番号
-const page = ref<number>(1);
-// 並び順
-const sortOrder = ref<'desc' | 'asc'>('asc');
-// 読み込み中かどうか
-const isLoading = ref<boolean>(true);
-
-// 全ての予約データ（一度だけ取得）
+// 全録画予約（カンバンとリストで共有）
 const allReservations = ref<IReservation[]>([]);
 
-// 録画予約リストコンポーネントの参照
+// リスト表示用（ソート・ページング後）
+const reservations = ref<IReservation[]>([]);
+const total = ref<number>(0);
+const page = ref<number>(1);
+const sortOrder = ref<'desc' | 'asc'>('asc');
+const isLoading = ref<boolean>(true);
+
+// カンバンカードクリック時の詳細ドロワー
+const drawerOpen = ref(false);
+const selectedReservation = ref<IReservation | null>(null);
+
 const reservationList = ref<InstanceType<typeof ReservationList>>();
 
-// 自動更新用の interval ID を保持
 const autoRefreshInterval = ref<number | null>(null);
-
-// 自動更新の間隔 (ミリ秒)
-const AUTO_REFRESH_INTERVAL = 30 * 1000;  // 30秒
+const AUTO_REFRESH_INTERVAL = 30 * 1000;
 const ITEMS_PER_PAGE = 25;
 
 /**
@@ -96,60 +123,61 @@ function updateDisplayData() {
         sortedReservations.sort((a, b) => new Date(b.program.start_time).getTime() - new Date(a.program.start_time).getTime());
     }
 
-    // ページネーション用の計算
     const startIndex = (page.value - 1) * ITEMS_PER_PAGE;
-    const endIndex = startIndex + ITEMS_PER_PAGE;
-
-    reservations.value = sortedReservations.slice(startIndex, endIndex);
+    reservations.value = sortedReservations.slice(startIndex, startIndex + ITEMS_PER_PAGE);
     total.value = sortedReservations.length;
 }
 
-/**
- * ページ番号を更新する
- */
 async function updatePage(new_page: number) {
     page.value = new_page;
-    // クエリパラメータを更新（データの再取得はしない）
-    await router.replace({
-        query: {
-            ...route.query,
-            page: new_page.toString(),
-        },
-    });
-    // updateDisplayData は watch によって自動的に呼び出されるため、ここでは呼び出さない
+    await router.replace({ query: { ...route.query, page: new_page.toString() } });
 }
 
-/**
- * 並び順を更新する
- */
 async function updateSortOrder(new_sort_order: 'desc' | 'asc') {
     sortOrder.value = new_sort_order;
-    page.value = 1; // ページを1に戻す
-    // クエリパラメータを更新（データの再取得はしない）
-    await router.replace({
-        query: {
-            ...route.query,
-            order: new_sort_order,
-            page: '1',
-        },
-    });
-    // updateDisplayData は watch によって自動的に呼び出されるため、ここでは呼び出さない
+    page.value = 1;
+    await router.replace({ query: { ...route.query, order: new_sort_order, page: '1' } });
 }
 
 /**
- * 録画予約が削除された時の処理
+ * リストパネルからの削除イベント処理
  */
 function handleReservationDeleted(reservation_id: number) {
-    // 削除された予約を all_reservations から除去
-    allReservations.value = allReservations.value.filter(reservation => reservation.id !== reservation_id);
-    // 表示データを更新
+    allReservations.value = allReservations.value.filter(r => r.id !== reservation_id);
     updateDisplayData();
-    // 削除イベントを受けたらリストを即時更新
-    console.log(`Reservation ${reservation_id} deleted, refreshing list...`);
     updateAllSections();
 }
 
-// 全セクションの更新を実行
+/**
+ * カンバンカードクリック時：詳細ドロワーを開く
+ */
+function openDetail(reservation: IReservation) {
+    selectedReservation.value = reservation;
+    drawerOpen.value = true;
+}
+
+/**
+ * カンバンドロワーからの削除イベント処理
+ */
+function handleDrawerDeleted(reservation_id: number) {
+    allReservations.value = allReservations.value.filter(r => r.id !== reservation_id);
+    updateDisplayData();
+    drawerOpen.value = false;
+    updateAllSections();
+}
+
+/**
+ * カンバンドロワーからの更新イベント処理
+ */
+function handleDrawerUpdated(updated: IReservation) {
+    const idx = allReservations.value.findIndex(r => r.id === updated.id);
+    if (idx !== -1) {
+        allReservations.value[idx] = updated;
+        updateDisplayData();
+    }
+    selectedReservation.value = updated;
+}
+
 const updateAllSections = async () => {
     try {
         await fetchAllReservations();
@@ -160,17 +188,13 @@ const updateAllSections = async () => {
     }
 };
 
-// 自動更新を開始
 const startAutoRefresh = () => {
     if (autoRefreshInterval.value === null) {
-        // 初回更新
         updateAllSections();
-        // 定期更新を開始
         autoRefreshInterval.value = window.setInterval(updateAllSections, AUTO_REFRESH_INTERVAL);
     }
 };
 
-// 自動更新を停止
 const stopAutoRefresh = () => {
     if (autoRefreshInterval.value !== null) {
         clearInterval(autoRefreshInterval.value);
@@ -178,48 +202,33 @@ const stopAutoRefresh = () => {
     }
 };
 
-// クエリパラメータが変更されたら表示データを更新（再取得はしない）
-watch(() => route.query, async (newQuery) => {
-    // ページ番号を同期
+// クエリパラメータ変更時に表示データを更新
+watch(() => route.query, (newQuery) => {
     if (newQuery.page) {
-        const page_number = parseInt(String(newQuery.page), 10);
-        if (Number.isFinite(page_number) && page_number > 0) {
-            page.value = page_number;
-        }
+        const p = parseInt(String(newQuery.page), 10);
+        if (Number.isFinite(p) && p > 0) page.value = p;
     }
-    // ソート順を同期
     if (newQuery.order) {
-        const order = String(newQuery.order);
-        if (order === 'asc' || order === 'desc') {
-            sortOrder.value = order;
-        }
+        const o = String(newQuery.order);
+        if (o === 'asc' || o === 'desc') sortOrder.value = o;
     }
     updateDisplayData();
 }, { deep: true });
 
-// allReservations の変更を監視して表示データを更新
-watch(() => allReservations.value, () => {
-    updateDisplayData();
-}, { deep: true });
+// allReservations 変更時にリスト表示データを更新
+watch(() => allReservations.value, () => { updateDisplayData(); }, { deep: true });
 
-// コンポーネントがマウントされた時
 onMounted(async () => {
-    // クエリパラメータから初期値を設定
     if (route.query.page && typeof route.query.page === 'string') {
         page.value = parseInt(route.query.page, 10);
     }
     if (route.query.order && typeof route.query.order === 'string') {
         sortOrder.value = route.query.order as 'desc' | 'asc';
     }
-
-    // 自動更新を開始
     startAutoRefresh();
 });
 
-// コンポーネントのクリーンアップ
-onUnmounted(() => {
-    stopAutoRefresh();
-});
+onUnmounted(() => { stopAutoRefresh(); });
 
 </script>
 <style lang="scss" scoped>
@@ -228,7 +237,7 @@ onUnmounted(() => {
     display: flex;
     flex-direction: column;
     width: 100%;
-    min-width: 0;  // very important!!! これがないと要素がはみ出す
+    min-width: 0;
 }
 
 .reservations-all-container {
@@ -237,9 +246,6 @@ onUnmounted(() => {
     width: 100%;
     height: 100%;
     padding: 20px;
-    margin: 0 auto;
-    min-width: 0;
-    max-width: 1000px;
     @include smartphone-horizontal {
         padding: 16px 20px !important;
     }
@@ -249,6 +255,106 @@ onUnmounted(() => {
     @include smartphone-vertical {
         padding: 16px 8px !important;
         padding-top: 8px !important;
+    }
+
+    // パネルタイトル（カンバン側の「週間カレンダー」ラベル）
+    &__panel-title {
+        font-size: 20px;
+        font-weight: 700;
+        padding-top: 4px;
+        padding-bottom: 12px;
+        @include smartphone-vertical {
+            font-size: 18px;
+            padding-bottom: 8px;
+        }
+    }
+
+    // 水平分割レイアウト
+    &__split {
+        display: flex;
+        flex-direction: row;
+        align-items: flex-start;
+        gap: 0;
+        width: 100%;
+        min-width: 0;
+
+        // タブレット縦画面以下は縦積みに切り替える
+        @include tablet-vertical {
+            flex-direction: column;
+        }
+        @include smartphone-horizontal {
+            flex-direction: column;
+        }
+        @include smartphone-vertical {
+            flex-direction: column;
+        }
+    }
+
+    // 左：カンバンパネル（画面の広い方をカンバンに割り当てる）
+    &__kanban-panel {
+        flex: 1 1 0;
+        min-width: 0;
+        padding-right: 20px;
+        @include tablet-vertical {
+            padding-right: 0;
+            padding-bottom: 24px;
+            width: 100%;
+        }
+        @include smartphone-horizontal {
+            padding-right: 0;
+            padding-bottom: 20px;
+            width: 100%;
+        }
+        @include smartphone-vertical {
+            padding-right: 0;
+            padding-bottom: 20px;
+            width: 100%;
+        }
+    }
+
+    // 区切り線（縦方向）
+    &__divider {
+        flex: 0 0 1px;
+        align-self: stretch;
+        background: rgb(var(--v-theme-background-lighten-2));
+        margin: 0 4px;
+        @include tablet-vertical {
+            display: none;
+        }
+        @include smartphone-horizontal {
+            display: none;
+        }
+        @include smartphone-vertical {
+            display: none;
+        }
+    }
+
+    // 右：リストパネル（固定幅）
+    &__list-panel {
+        flex: 0 0 400px;
+        min-width: 0;
+        padding-left: 20px;
+        @include desktop {
+            flex: 0 0 420px;
+        }
+        @include tablet-horizontal {
+            flex: 0 0 360px;
+        }
+        @include tablet-vertical {
+            padding-left: 0;
+            flex: unset;
+            width: 100%;
+        }
+        @include smartphone-horizontal {
+            padding-left: 0;
+            flex: unset;
+            width: 100%;
+        }
+        @include smartphone-vertical {
+            padding-left: 0;
+            flex: unset;
+            width: 100%;
+        }
     }
 }
 
