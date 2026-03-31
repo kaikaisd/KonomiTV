@@ -286,6 +286,7 @@ onUnmounted(() => { stopAutoRefresh(); });
         &-text {
             flex: 1;
             min-width: 0;
+            overflow: hidden;
         }
 
         &-title {
@@ -297,6 +298,8 @@ onUnmounted(() => { stopAutoRefresh(); });
             font-size: 0.78rem;
             color: rgb(var(--v-theme-text-darken-1));
             margin-top: 2px;
+            white-space: normal;
+            overflow-wrap: break-word;
         }
 
         &-arrow {
