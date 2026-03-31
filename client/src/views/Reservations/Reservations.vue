@@ -286,12 +286,14 @@ onUnmounted(() => { stopAutoRefresh(); });
         &-text {
             flex: 1;
             min-width: 0;
-            overflow: hidden;
         }
 
         &-title {
             font-size: 0.9rem;
             font-weight: bold;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         &-sub {
@@ -300,6 +302,7 @@ onUnmounted(() => { stopAutoRefresh(); });
             margin-top: 2px;
             white-space: normal;
             overflow-wrap: break-word;
+            word-break: break-all;
         }
 
         &-arrow {

@@ -208,12 +208,14 @@ onUnmounted(() => {
         &-text {
             flex: 1;
             min-width: 0;
-            overflow: hidden;
         }
 
         &-title {
             font-size: 0.95rem;
             font-weight: bold;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         &-sub {
@@ -222,6 +224,7 @@ onUnmounted(() => {
             margin-top: 2px;
             white-space: normal;
             overflow-wrap: break-word;
+            word-break: break-all;
         }
 
         &-arrow {
