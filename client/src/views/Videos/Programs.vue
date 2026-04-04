@@ -11,6 +11,25 @@
                         { name: 'ビデオをみる', path: '/videos/' },
                         { name: '録画番組一覧', path: '/videos/programs', disabled: true },
                     ]" />
+
+                    <!-- 週間カレンダーへのリンクカード -->
+                    <v-card class="recorded-programs-container__kanban-card mb-4" elevation="1"
+                        @click="$router.push('/videos/week')" style="cursor: pointer;">
+                        <v-card-text class="recorded-programs-container__kanban-card-content">
+                            <Icon icon="fluent:calendar-week-numbers-20-regular" width="26px"
+                                class="recorded-programs-container__kanban-card-icon" />
+                            <div class="recorded-programs-container__kanban-card-text">
+                                <div class="recorded-programs-container__kanban-card-title">週間カレンダー</div>
+                                <div class="recorded-programs-container__kanban-card-sub">
+                                    録画番組を週ごとのカンバンカレンダーで確認できます。
+                                </div>
+                            </div>
+                            <Icon icon="fluent:chevron-right-20-regular" width="20px"
+                                class="recorded-programs-container__kanban-card-arrow" />
+                        </v-card-text>
+                    </v-card>
+
+                    <!-- 録画番組リスト -->
                     <RecordedProgramList
                         title="録画番組一覧"
                         :programs="programs"
@@ -150,6 +169,50 @@ onMounted(async () => {
     @include smartphone-vertical {
         padding: 16px 8px !important;
         padding-top: 8px !important;
+    }
+
+    // 週間カレンダーリンクカード
+    &__kanban-card {
+        background: rgb(var(--v-theme-background-lighten-2)) !important;
+
+        &-content {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 12px 16px !important;
+        }
+
+        &-icon {
+            flex-shrink: 0;
+            color: rgb(var(--v-theme-primary));
+        }
+
+        &-text {
+            flex: 1;
+            min-width: 0;
+        }
+
+        &-title {
+            font-size: 0.9rem;
+            font-weight: bold;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        &-sub {
+            font-size: 0.78rem;
+            color: rgb(var(--v-theme-text-darken-1));
+            margin-top: 2px;
+            white-space: normal;
+            overflow-wrap: break-word;
+            word-break: break-all;
+        }
+
+        &-arrow {
+            flex-shrink: 0;
+            color: rgb(var(--v-theme-text-darken-1));
+        }
     }
 }
 

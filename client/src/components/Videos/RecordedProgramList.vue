@@ -15,6 +15,16 @@
                 </div>
             </h2>
             <div class="recorded-program-list__actions" :class="{'recorded-program-list__actions--mylist': forMylist}">
+                <!-- リスト/カードグリッド切り替えボタン -->
+                <v-btn-toggle v-if="!hideViewToggle" v-model="view_mode" mandatory density="compact"
+                    class="recorded-program-list__view-toggle mr-2" color="primary" rounded="lg">
+                    <v-btn value="list" size="small" v-ftooltip="'リスト表示'">
+                        <Icon icon="fluent:apps-list-20-regular" width="18px" height="18px" />
+                    </v-btn>
+                    <v-btn value="card" size="small" v-ftooltip="'カードグリッド表示'">
+                        <Icon icon="fluent:grid-20-regular" width="18px" height="18px" />
+                    </v-btn>
+                </v-btn-toggle>
                 <v-select v-if="!hideSort"
                     v-model="sort_order"
                     :items="forMylist ? [
@@ -50,6 +60,7 @@
                 'recorded-program-list__grid--loading': isLoading || isSearching,
                 'recorded-program-list__grid--empty': displayTotal === 0 && showEmptyMessage,
                 'recorded-program-list__grid--searching': isSearching,
+                'recorded-program-list__grid--card': view_mode === 'card',
             }">
             <div class="recorded-program-list__empty"
                 :class="{
@@ -65,6 +76,7 @@
             <div class="recorded-program-list__grid-content">
                 <RecordedProgram v-for="program in displayPrograms" :key="program.id" :program="program"
                     :forMylist="forMylist" :forWatchedHistory="forWatchedHistory" :forSeries="forSeries" :seriesId="seriesId"
+                    :cardView="view_mode === 'card'"
                     @deleted="handleProgramDeleted" @removedFromSeries="handleProgramRemovedFromSeries" />
             </div>
         </div>
@@ -85,6 +97,9 @@
 import { ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
+// ビュー切り替えの設定キー (localStorage に保存して次回以降も維持する)
+const VIEW_MODE_STORAGE_KEY = 'recorded-program-list-view-mode';
+
 import RecordedProgram from '@/components/Videos/RecordedProgram.vue';
 import { IRecordedProgram, MylistSortOrder, SortOrder } from '@/services/Videos';
 import Utils from '@/utils';
@@ -104,6 +119,7 @@ const props = withDefaults(defineProps<{
     showMoreButton?: boolean;
     showBackButton?: boolean;
     showEmptyMessage?: boolean;
+    hideViewToggle?: boolean;
     emptyIcon?: string;
     emptyMessage?: string;
     emptySubMessage?: string;
@@ -122,6 +138,7 @@ const props = withDefaults(defineProps<{
     showMoreButton: false,
     showBackButton: false,
     showEmptyMessage: true,
+    hideViewToggle: false,
     emptyIcon: 'fluent:warning-20-regular',
     emptyMessage: '録画番組が見つかりませんでした。',
     emptySubMessage: 'サーバー設定で録画フォルダのパスを<br class="d-sm-none">正しく設定できているか確認してください。',
@@ -146,6 +163,11 @@ const current_page = ref(props.page);
 
 // 並び順
 const sort_order = ref<SortOrder | MylistSortOrder>(props.sortOrder);
+
+// リスト/カードグリッド表示モード (localStorage で永続化)
+const saved_view_mode = localStorage.getItem(VIEW_MODE_STORAGE_KEY);
+const view_mode = ref<'list' | 'card'>(saved_view_mode === 'card' ? 'card' : 'list');
+watch(view_mode, (mode) => { localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode); });
 
 // 内部で管理するプログラムリスト
 const displayPrograms = ref<IRecordedProgram[]>([...props.programs]);
@@ -294,6 +316,14 @@ const handleProgramRemovedFromSeries = (id: number) => {
         }
     }
 
+    &__view-toggle {
+        :deep(.v-btn) {
+            height: 34px !important;
+            min-width: 34px !important;
+            padding: 0 8px !important;
+        }
+    }
+
     &__sort {
         :deep(.v-field__input) {
             font-size: 14px !important;
@@ -345,6 +375,41 @@ const handleProgramRemovedFromSeries = (id: number) => {
             // 最後の項目以外の下にボーダーを追加
             &:not(:last-child) > .recorded-program__container {
                 border-bottom: 1px solid rgb(var(--v-theme-background-lighten-2));
+            }
+        }
+
+        // カードグリッドビュー：CSS Grid で複数列レイアウト
+        &--card {
+            background: transparent;
+            border-radius: 0;
+            overflow: visible;
+
+            .recorded-program-list__grid-content {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+                gap: 10px;
+                @include tablet-vertical {
+                    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+                    gap: 8px;
+                }
+                @include smartphone-horizontal {
+                    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+                    gap: 8px;
+                }
+                @include smartphone-vertical {
+                    grid-template-columns: repeat(2, 1fr);
+                    gap: 6px;
+                }
+            }
+
+            :deep(.recorded-program) {
+                border-radius: 8px;
+                overflow: hidden;
+                background: rgb(var(--v-theme-background-lighten-1));
+
+                &:not(:last-child) > .recorded-program__container {
+                    border-bottom: none;
+                }
             }
         }
     }

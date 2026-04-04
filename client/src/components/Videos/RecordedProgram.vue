@@ -5,6 +5,7 @@
             'recorded-program--recording': program.recorded_video.status === 'Recording',
             'recorded-program--analyzing': !program.recorded_video.has_key_frames && program.recorded_video.status !== 'AnalysisFailed',
             'recorded-program--failed': program.recorded_video.status === 'AnalysisFailed',
+            'recorded-program--card': cardView,
         }">
         <div class="recorded-program__container">
             <div class="recorded-program__thumbnail">
@@ -287,11 +288,14 @@ const props = withDefaults(defineProps<{
     forWatchedHistory?: boolean;
     forSeries?: boolean;
     seriesId?: number;
+    // カードグリッドビュー表示時は true にする
+    cardView?: boolean;
 }>(), {
     forMylist: false,
     forWatchedHistory: false,
     forSeries: false,
     seriesId: 0,
+    cardView: false,
 });
 
 // Emits
@@ -1003,6 +1007,90 @@ const removeFromSeries = async () => {
         .recorded-program__mylist,
         .recorded-program__menu {
             pointer-events: auto;
+        }
+    }
+
+    // カードグリッドビュー：サムネイル上・テキスト下の縦積みレイアウト
+    &--card {
+        height: auto;
+        padding: 0;
+        contain-intrinsic-height: auto 220px;
+
+        .recorded-program__container {
+            flex-direction: column;
+            padding: 0;
+            align-items: stretch;
+        }
+
+        .recorded-program__thumbnail {
+            width: 100%;
+            height: auto;
+            aspect-ratio: 16 / 9;
+            border-radius: 0;
+            flex-shrink: 0;
+        }
+
+        .recorded-program__thumbnail-image {
+            aspect-ratio: 16 / 9;
+            border-radius: 0;
+        }
+
+        .recorded-program__content {
+            margin: 8px 10px 36px;
+            justify-content: flex-start;
+
+            &-title {
+                font-size: 13.5px;
+                white-space: normal;
+                display: -webkit-box;
+                line-height: 1.4;
+                -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical;
+            }
+
+            &-meta {
+                font-size: 12px;
+                margin-top: 4px;
+                flex-direction: column;
+                align-items: flex-start;
+
+                &-broadcaster {
+                    &-icon {
+                        width: 24px;
+                        height: 14px;
+                        margin-right: 6px;
+                    }
+                    &-name {
+                        font-size: 11.5px;
+                    }
+                }
+
+                &-time {
+                    margin-left: 0;
+                    margin-top: 2px;
+                    min-width: unset;
+                    font-size: 11px;
+                }
+            }
+
+            &-description {
+                display: none;
+            }
+        }
+
+        // マイリスト・メニューボタンをカード下部に移動
+        .recorded-program__mylist {
+            top: auto;
+            bottom: 6px;
+            right: 36px;
+            transform: none;
+        }
+
+        .recorded-program__menu {
+            top: auto;
+            bottom: 6px;
+            right: 6px;
+            transform: none;
         }
     }
 }
