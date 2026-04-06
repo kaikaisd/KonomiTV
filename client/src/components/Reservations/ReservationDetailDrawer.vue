@@ -192,7 +192,7 @@
     <ReservationConditionEditDialog
         v-model="showAddRuleDialog"
         :condition="null"
-        :initial-keyword="displayProgram?.title ?? ''" />
+        :initial-keyword="ProgramUtils.extractSeriesTitle(displayProgram?.title ?? '')" />
 </template>
 <script lang="ts" setup>
 

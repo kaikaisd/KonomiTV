@@ -304,7 +304,14 @@ class MirakurunRuleMatchTask:
         range_start = dr.start_day_of_week * 24 * 60 + dr.start_hour * 60 + dr.start_minute
         range_end = dr.end_day_of_week * 24 * 60 + dr.end_hour * 60 + dr.end_minute
 
-        if range_start <= range_end:
+        if range_start == range_end:
+            # start と end が同一の場合は「その日の丸一日 (0:00〜翌日 0:00)」を意味する
+            # クライアントで曜日のみ選択し時間帯を未指定にした場合、start/end ともに同じ曜日の 0:00 が送られてくるため、
+            # そのまま比較すると range_start <= x < range_end が常に False になり何もマッチしなくなる問題を防ぐ
+            # end を 24 時間 (1440 分) 進めることで、その曜日の全時間帯をカバーする
+            range_end += 24 * 60
+
+        if range_start < range_end:
             # 週をまたがない通常の範囲
             return range_start <= prog_minutes_of_week < range_end
         else:

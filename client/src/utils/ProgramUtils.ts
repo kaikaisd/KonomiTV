@@ -700,4 +700,152 @@ export class ProgramUtils {
             }
         }
     }
+
+
+    // ==================== 自動予約ルール用タイトル正規化 ====================
+    // server/app/metadata/TitleParser.py の _cleanTitle() + parse() の TypeScript 移植
+    // EPG タイトルから放送タグ・放送枠・話数・サブタイトルを除去し、シリーズ名のみを抽出する
+
+    // EPG 放送タグ: [字], [新], [4K], (二), 【終】, ［再］ など5種類の括弧スタイルのタグ
+    private static readonly BROADCAST_TAG_PATTERN = new RegExp(
+        // [字], [新], [4K], [5.1] など半角角括弧
+        '\\[(?:字|二|デ|解|多|S|新|終|再|無|SS|HV|P|W|手|初|生|N|H|複|双|別|' +
+        'カ|英|韓|中|天|擬|吹|撮|録|問|画|前|後|編|回|全|話|映|CC|OP|B|' +
+        'S1|S2|S3|MV|D|演|移|他|収|販|PPV|配|料|無料|' +
+        '3D|2K|4K|8K|HDR|SD|HC|5\\.1|7\\.1|22\\.2|' +
+        '60P|120P|d|Hi-Res|Lossless|SHV|UHD|VOD)\\]|' +
+        // (字), (二), (再) など半角丸括弧 (一部のみ: 誤検出を避けるため)
+        '\\((字|二|デ|解|多|新|終|再|無|S)\\)|' +
+        // （字）,（再）など全角丸括弧 (一部のみ)
+        '（(字|二|デ|解|多|新|終|再|無|S)）|' +
+        // 【新】, 【終】, 【無料】 など隅付き括弧
+        '【(新|終|再|初|字|二|デ|解|無料|生|録)】|' +
+        // ［新］, ［終］ など全角角括弧
+        '［(新|終|再|初|字|二|デ|解|無料|生|録)］',
+        'g',
+    );
+
+    // ジャンルプレフィックス (括弧型): アニメ「番組名」→ 番組名
+    private static readonly GENRE_PREFIX_BRACKET_PATTERN =
+        /^(?:映画|アニメ|連続テレビ小説|土曜ドラマ|ドラマ|特別番組|特番|新番組|最終回)[「『](.*?)[」』]$/;
+
+    // ジャンルプレフィックス (スペース型): アニメ 番組名 → 番組名
+    private static readonly GENRE_PREFIX_SPACE_PATTERN =
+        /^(?:映画|アニメ|連続テレビ小説|土曜ドラマ|ドラマ|特別番組|特番|新番組|最終回)\s+/;
+
+    // NHK 番組枠プレフィックス: 【連続テレビ小説】番組名 → 番組名
+    private static readonly NHK_SLOT_PREFIX_PATTERN =
+        /^【(?:連続テレビ小説|大河ドラマ|夜ドラ|よるドラ|土曜ドラマ|ドラマ10|アニメ)】\s*/;
+
+    // 放送枠プレフィックス (山括弧): <ノイタミナ> 番組名 → 番組名
+    private static readonly ANGLE_BRACKET_PREFIX_PATTERN = /^(?:<[^>]+>|＜[^＞]+＞)\s*/;
+
+    // 放送枠プレフィックス (中黒区切り): アニメA・番組名 → 番組名
+    private static readonly SLOT_PREFIX_PATTERN = /^アニメ[A-Za-z]?・\s*/;
+
+    // 放送枠サフィックス: 番組名 AnichU → 番組名
+    private static readonly SLOT_SUFFIX_PATTERN = /\s*(?:AnichU|【ANiMAZiNG[!！]+】|【アニメイズム】)\s*$/;
+
+    // エピソード番号・サブタイトルの開始位置を検出するパターン
+    // 漢数字を含む数値パターン
+    private static readonly _NUM = '[0-9０-９一二三四五六七八九十百千万零]+';
+    private static readonly EPISODE_SUBTITLE_PATTERN = new RegExp(
+        // ---- スペースの後に続くエピソード表記 (スペース部分から切断) ----
+        // 第N話, 第N回, 第N幕 (漢数字対応)
+        `(?:[\\s])(?:第${ProgramUtils._NUM}[話回幕]?)` +
+        // N話, N回, N幕 (「第」なし、漢数字対応)
+        `|(?:[\\s])(?:${ProgramUtils._NUM}[話回幕])` +
+        // #N, ##N (ハッシュ付き話数)
+        `|(?:[\\s])(?:#{1,2}${ProgramUtils._NUM})` +
+        // ★第N話, ★#N (★区切り)
+        `|(?:[\\s])★\\s*(?:第${ProgramUtils._NUM}[話回幕]?|#${ProgramUtils._NUM})` +
+        // (N), （N） (括弧付き話数 — スペース後)
+        `|(?:[\\s])(?:\\(${ProgramUtils._NUM}\\)|（${ProgramUtils._NUM}）)` +
+        // EP.N, EPN, Episode N (英語表記)
+        `|(?:[\\s])(?:EP\\.?\\s*${ProgramUtils._NUM}|Episode\\s*${ProgramUtils._NUM})` +
+        // Teil N (ドイツ語表記 — アルネの事件簿等)
+        `|(?:[\\s])(?:Teil\\s*${ProgramUtils._NUM})` +
+        // N投目, N本目 などの特殊カウンタ
+        `|(?:[\\s])(?:${ProgramUtils._NUM}(?:投目|本目|局目|戦目))` +
+        // 第N部 (パート)
+        `|(?:[\\s])第${ProgramUtils._NUM}[部]` +
+        // ---- スペース不要のパターン ----
+        // (N) 括弧付き話数 (スペースなし — 【連続テレビ小説】ばけばけ(98) 等)
+        `|\\(${ProgramUtils._NUM}\\)` +
+        // #N (スペースなし — 番組名#3 のケース)
+        '|#\\d+' +
+        // ---- サブタイトル区切り文字 (スペースの後に括弧や記号で始まるサブタイトル) ----
+        '|(?:[\\s])(?:[「『【＜〈])' +
+        // ▽, ▼ (NHKニュースのサブタイトル区切り)
+        '|[▽▼]' +
+        // ---- 末尾の裸の数字 (スペースの後) ----
+        `|(?:[\\s])${ProgramUtils._NUM}$`,
+        'i',
+    );
+
+
+    /**
+     * EPG タイトルから放送タグ・放送枠・話数・サブタイトルを除去し、シリーズ名 (キーワード) を抽出する
+     * server/app/metadata/TitleParser.py の _cleanTitle() + parse() の TypeScript 移植版
+     * 自動予約ルール追加時のキーワード初期値として使用する
+     *
+     * 処理の流れ:
+     *   1. Unicode NFKC 正規化 (normalize)
+     *   2. EPG 放送タグの除去: [字], (二), 【新】, ［再］ など
+     *   3. ジャンルプレフィックスの除去: アニメ「...」, アニメ・, 【連続テレビ小説】 等
+     *   4. 放送枠プレフィックス/サフィックスの除去: <ノイタミナ>, アニメA・, AnichU 等
+     *   5. エピソード番号・サブタイトルの除去: #3, 第1話, 「サブタイトル」 等
+     *
+     * @param title EPG 番組タイトル
+     * @returns シリーズ名 (キーワード)
+     */
+    static extractSeriesTitle(title: string): string {
+        if (!title || !title.trim()) return title;
+
+        // ステップ1: Unicode NFKC 正規化
+        // 全角英数字→半角、全角スペース→半角スペース、互換文字の統一
+        let cleaned = title.trim().normalize('NFKC');
+
+        // ステップ2: 放送タグの除去
+        cleaned = cleaned.replace(ProgramUtils.BROADCAST_TAG_PATTERN, '');
+
+        // ステップ3: ジャンルプレフィックスの除去
+        // NHK 番組枠: 【連続テレビ小説】, 【夜ドラ】 など
+        cleaned = cleaned.replace(ProgramUtils.NHK_SLOT_PREFIX_PATTERN, '');
+        // 括弧型: アニメ「番組名」→ 番組名
+        const trimmed = cleaned.trim();
+        const bracketMatch = ProgramUtils.GENRE_PREFIX_BRACKET_PATTERN.exec(trimmed);
+        if (bracketMatch) {
+            cleaned = bracketMatch[1];
+        } else {
+            // スペース型: アニメ 番組名 → 番組名
+            cleaned = trimmed.replace(ProgramUtils.GENRE_PREFIX_SPACE_PATTERN, '');
+        }
+
+        // ステップ4: 放送枠プレフィックス/サフィックスの除去
+        cleaned = cleaned.replace(ProgramUtils.ANGLE_BRACKET_PREFIX_PATTERN, '');
+        cleaned = cleaned.replace(ProgramUtils.SLOT_PREFIX_PATTERN, '');
+        cleaned = cleaned.replace(ProgramUtils.SLOT_SUFFIX_PATTERN, '');
+
+        // ステップ5: スペースの正規化
+        cleaned = cleaned.replace(/ {2,}/g, ' ');
+        cleaned = cleaned.trim().replace(/^[\s・-]+|[\s・-]+$/g, '');
+
+        if (!cleaned) return title.trim();
+
+        // ステップ6: エピソード番号・サブタイトルの開始位置を検出し、そこでタイトルを切断する
+        const episodeMatch = ProgramUtils.EPISODE_SUBTITLE_PATTERN.exec(cleaned);
+        if (episodeMatch) {
+            const seriesTitle = cleaned.substring(0, episodeMatch.index).trim();
+            // 切断後のシリーズ名に残っている放送枠サフィックスを追加で除去する
+            const finalTitle = seriesTitle.replace(ProgramUtils.SLOT_SUFFIX_PATTERN, '').trim();
+            // シリーズ名が空になった場合は正規化後のタイトル全体を使う
+            if (finalTitle) {
+                return finalTitle;
+            }
+        }
+
+        // エピソードパターンが見つからなかった場合、正規化後のタイトル全体を返す
+        return cleaned.replace(ProgramUtils.SLOT_SUFFIX_PATTERN, '').trim() || title.trim();
+    }
 }

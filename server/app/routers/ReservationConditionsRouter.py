@@ -663,7 +663,8 @@ async def UpdateReservationConditionAPI(
     指定されたキーワード自動予約条件を更新する。
     """
 
-    # Mirakurun バックエンドの場合は DB のルールを更新し、即座にスキャンを実行する
+    # Mirakurun バックエンドの場合は、旧条件で生成された保留中予約をキャンセルしてから
+    # ルールを更新し、新しい条件で予約を再生成する
     if Config().general.backend == 'Mirakurun':
         from app.models.MirakurunRecordingRule import MirakurunRecordingRule
         from app.models.MirakurunReservation import MirakurunReservation
@@ -674,11 +675,30 @@ async def UpdateReservationConditionAPI(
                 status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail = 'Specified reservation_condition_id was not found',
             )
+
+        # このルールに紐づく保留中の予約をキャンセルする (録画中のものはそのまま続行させる)
+        # ルールの条件が変わった場合、旧条件でマッチしていた番組の予約が残り続けるのを防ぐため、
+        # 一度すべてキャンセルしてから新しい条件で再生成する
+        pending_reservations = await MirakurunReservation.filter(
+            comment__contains=f'自動予約ルール ID:{rule.id}',
+            status='Pending',
+        ).all()
+        for reservation in pending_reservations:
+            reservation.status = 'Cancelled'
+            await reservation.save()
+        cancelled_count = len(pending_reservations)
+        if cancelled_count > 0:
+            logging.info(f'[ReservationConditionsRouter][UpdateReservationConditionAPI] '
+                         f'Cancelled {cancelled_count} pending reservation(s) for rule {rule.id} before re-matching.')
+
+        # ルールの条件と録画設定を更新する
         rule.setProgramSearchCondition(reserve_condition_update_request.program_search_condition)
         rule.setRecordSettings(reserve_condition_update_request.record_settings)
         await rule.save()
+
         # ルール更新直後にスキャンを走らせ、新しい条件にマッチした番組の予約を再生成する
-        asyncio.create_task(MirakurunRuleMatchTask.runNow())  # noqa: RUF006
+        # runNow() を await することで、予約が再生成された後に正確な予約数を返す
+        await MirakurunRuleMatchTask.runNow()
         reservation_count = await MirakurunReservation.filter(
             comment__contains=f'自動予約ルール ID:{rule.id}',
             status__in=['Pending', 'Recording'],

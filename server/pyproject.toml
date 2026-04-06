@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "KonomiTV"
-version = "0.13.14+mirakurun"
+version = "0.13.15+mirakurun"
 description = "KonomiTV: Kept Organized, Notably Optimized, Modern Interface TV media server"
 package-mode = false
 

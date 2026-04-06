@@ -198,14 +198,18 @@
                     </v-btn>
                 </div>
                 <div v-if="searchResult !== null" class="condition-edit-dialog__preview">
-                    <v-chip :color="searchResult.total > 0 ? 'primary' : 'default'"
-                        variant="tonal" size="small" class="mb-2">
-                        {{ searchResult.total }} 件ヒット
-                    </v-chip>
-                    <div v-if="searchResult.total === 0" class="condition-edit-dialog__preview-empty">
+                    <div class="d-flex align-center mb-2" style="gap: 8px;">
+                        <v-chip :color="previewPrograms.length > 0 ? 'primary' : 'default'"
+                            variant="tonal" size="small">
+                            {{ previewPrograms.length }} 件ヒット
+                        </v-chip>
+                        <v-switch v-model="deduplicatePreview" label="同一チャンネル内の重複を除外"
+                            color="primary" hide-details density="compact" class="flex-grow-0" />
+                    </div>
+                    <div v-if="previewPrograms.length === 0" class="condition-edit-dialog__preview-empty">
                         条件に一致する番組はありません。
                     </div>
-                    <div v-for="program in searchResult.programs.slice(0, 5)" :key="program.id"
+                    <div v-for="program in previewPrograms.slice(0, 5)" :key="program.id"
                         class="condition-edit-dialog__preview-item">
                         <span class="condition-edit-dialog__preview-time">
                             {{ dayjs(program.start_time).format('M/D(ddd) HH:mm') }}
@@ -215,8 +219,8 @@
                         <span class="condition-edit-dialog__preview-channel-name">{{ getChannelName(program) }}</span>
                         <span class="condition-edit-dialog__preview-title">{{ program.title }}</span>
                     </div>
-                    <div v-if="searchResult.total > 5" class="condition-edit-dialog__preview-more">
-                        …他 {{ searchResult.total - 5 }} 件
+                    <div v-if="previewPrograms.length > 5" class="condition-edit-dialog__preview-more">
+                        …他 {{ previewPrograms.length - 5 }} 件
                     </div>
                 </div>
 
@@ -450,6 +454,23 @@ function parseTime(time: string): [number, number] {
 
 const isSearching = ref(false);
 const searchResult = ref<IPrograms | null>(null);
+// 重複したプログラム (同一タイトル) をプレビュー結果から除外するかどうか
+const deduplicatePreview = ref(false);
+
+// プレビュー表示用の番組リスト (重複除外トグルに応じてフィルタリングされる)
+const previewPrograms = computed<IProgram[]>(() => {
+    if (!searchResult.value) return [];
+    if (!deduplicatePreview.value) return searchResult.value.programs;
+    // 同一チャンネル内で同一タイトルの番組は最初の1件のみ残す (再放送などの重複を除外)
+    // 異なるチャンネルの同一タイトル番組はそれぞれ残る
+    const seen = new Set<string>();
+    return searchResult.value.programs.filter((program) => {
+        const key = `${program.channel_id}::${program.title}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+});
 
 async function previewSearch(): Promise<void> {
     isSearching.value = true;
