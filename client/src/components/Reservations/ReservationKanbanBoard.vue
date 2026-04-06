@@ -13,7 +13,7 @@
             </v-btn>
             <v-btn v-if="!isCurrentWeek" variant="tonal" size="x-small" color="primary"
                 class="kanban-panel__today-btn" @click="goToCurrentWeek">
-                今週
+                今日
             </v-btn>
         </div>
 
@@ -117,10 +117,10 @@ defineEmits<{
 // 曜日名 (0=日曜〜6=土曜)
 const DAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
 
-// 現在表示中の週の開始日 (日曜日)
-const weekStart = ref<Dayjs>(dayjs().startOf('week'));
+// 現在表示中の週の開始日 (デフォルトは今日)
+const weekStart = ref<Dayjs>(dayjs().startOf('day'));
 
-// 週の 7 日間
+// 7 日間 (今日 〜 T+6)
 const weekDays = computed<Dayjs[]>(() =>
     Array.from({ length: 7 }, (_, i) => weekStart.value.add(i, 'day')),
 );
@@ -135,9 +135,9 @@ const weekLabel = computed(() => {
     return `${start.format('YYYY/MM/DD')} 〜 ${end.format('MM/DD')}`;
 });
 
-// 今週かどうか
+// 今日始まりかどうか
 const isCurrentWeek = computed(() =>
-    weekStart.value.isSame(dayjs().startOf('week'), 'day'),
+    weekStart.value.isSame(dayjs(), 'day'),
 );
 
 const isToday = (day: Dayjs): boolean => day.isSame(dayjs(), 'day');
@@ -182,7 +182,7 @@ const onLogoError = (event: Event) => {
 
 const prevWeek = () => { weekStart.value = weekStart.value.subtract(7, 'day'); };
 const nextWeek = () => { weekStart.value = weekStart.value.add(7, 'day'); };
-const goToCurrentWeek = () => { weekStart.value = dayjs().startOf('week'); };
+const goToCurrentWeek = () => { weekStart.value = dayjs().startOf('day'); };
 
 </script>
 <style lang="scss" scoped>
