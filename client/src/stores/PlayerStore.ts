@@ -2,6 +2,8 @@
 import mitt from 'mitt';
 import { defineStore } from 'pinia';
 
+import type PlayerController from '@/services/player/PlayerController';
+
 import { ITweetCapture } from '@/components/Watch/Panel/Twitter.vue';
 import { ICommentData } from '@/services/player/managers/LiveCommentManager';
 import { IRecordedProgram, IRecordedProgramDefault } from '@/services/Videos';
@@ -57,6 +59,48 @@ export type PlayerEvents = {
         playback_position: number;  // シーク先の再生位置 (秒)
     }
 };
+
+
+/**
+ * ミニプレイヤーの状態を表す型
+ * ミニプレイヤーがアクティブなとき、元の視聴画面の情報を保持する
+ */
+export interface IMiniPlayerState {
+    // ミニプレイヤーの再生モード (Live: ライブ視聴, Video: ビデオ視聴)
+    playback_mode: 'Live' | 'Video';
+    // 最大化時に戻る元のルートパス (例: '/tv/watch/gr011', '/videos/watch/42')
+    route_path: string;
+    // ミニプレイヤーに表示する番組タイトル
+    title: string;
+    // ライブ視聴時のチャンネル ID (例: 'gr011')
+    channel_id: string | null;
+    // ビデオ視聴時の録画番組 ID
+    video_id: number | null;
+}
+
+
+/**
+ * PlayerController への参照をグローバルに保持するための変数
+ * ミニプレイヤーモードでは Watch ページから離れても PlayerController を破棄せずに保持し続ける必要がある
+ * Pinia ストアの state に入れるとリアクティブ化されて重くなるため、モジュールスコープのグローバル変数として保持する
+ */
+let active_player_controller: PlayerController | null = null;
+
+/**
+ * 現在アクティブな PlayerController を取得する
+ * ミニプレイヤーモードで Watch ページを離れた後も PlayerController を参照するために使用する
+ */
+export function getActivePlayerController(): PlayerController | null {
+    return active_player_controller;
+}
+
+/**
+ * 現在アクティブな PlayerController を設定する
+ * TV/Watch.vue や Videos/Watch.vue から呼び出され、PlayerController のライフサイクルを管理する
+ */
+export function setActivePlayerController(controller: PlayerController | null): void {
+    active_player_controller = controller;
+}
 
 
 /**
@@ -179,6 +223,14 @@ const usePlayerStore = defineStore('player', {
         // Twitter パネルコンポーネントで利用する、現在モーダルで拡大表示中のキャプチャ
         // UI 上と KeyboardShortcutManager の両方から操作する必要があるため PlayerStore に持たせている
         twitter_zoom_capture: null as ITweetCapture | null,
+
+        // ミニプレイヤーが表示中かどうか
+        // YouTube のように、視聴画面から他のページに遷移しても小さなプレイヤーを画面右下に表示し続ける機能
+        is_mini_player: false,
+
+        // ミニプレイヤーの状態情報
+        // ミニプレイヤーがアクティブなときの再生モード・ルート・タイトルなどの情報を保持する
+        mini_player_state: null as IMiniPlayerState | null,
     }),
     actions: {
 
@@ -240,7 +292,94 @@ const usePlayerStore = defineStore('player', {
             this.twitter_captures = [];
             this.twitter_zoom_capture_modal = false;
             this.twitter_zoom_capture = null;
-        }
+            // ミニプレイヤー関連の状態はリセットしない (ページ遷移をまたいで維持するため)
+        },
+
+        /**
+         * ミニプレイヤーモードに移行する
+         * DPlayer の DOM 要素を App.vue の永続コンテナに移動し、視聴画面から離れても再生を継続する
+         * @param state ミニプレイヤーの状態情報 (再生モード・ルートパス・タイトルなど)
+         */
+        minimizePlayer(state: IMiniPlayerState): void {
+            // BML ブラウザ (データ放送) のコンテナを非表示にしてから DOM を移動する
+            // BML ブラウザ内部の ResizeObserver が DOM 移動中に 0 サイズの canvas に対して
+            // drawImage() を実行してしまう問題 (InvalidStateError) を回避するため
+            const bml_browser_container = document.querySelector<HTMLDivElement>('.dplayer-bml-browser');
+            if (bml_browser_container) {
+                bml_browser_container.style.display = 'none';
+            }
+
+            // DPlayer の DOM 要素をミニプレイヤーコンテナに移動する
+            const dplayer_element = document.querySelector<HTMLDivElement>('.watch-player__dplayer');
+            const mini_player_container = document.getElementById('mini-player-persistent-container');
+            if (dplayer_element && mini_player_container) {
+                mini_player_container.appendChild(dplayer_element);
+            }
+
+            // ミニプレイヤーの状態を設定
+            this.is_mini_player = true;
+            this.mini_player_state = state;
+
+            console.log(`[PlayerStore] Mini player activated. (mode: ${state.playback_mode}, route: ${state.route_path})`);
+        },
+
+        /**
+         * ミニプレイヤーモードを終了してフルスクリーンの視聴画面に戻る
+         * DPlayer の DOM 要素を Watch コンポーネントのプレイヤーコンテナに移動する
+         */
+        restoreFromMiniPlayer(): void {
+            // DPlayer の DOM 要素を視聴画面のプレイヤーコンテナに戻す
+            const mini_player_container = document.getElementById('mini-player-persistent-container');
+            const watch_player_container = document.querySelector<HTMLDivElement>('.watch-player');
+            if (mini_player_container && watch_player_container) {
+                const dplayer_element = mini_player_container.querySelector<HTMLDivElement>('.watch-player__dplayer');
+                if (dplayer_element) {
+                    // Player.vue の空の .watch-player__dplayer を置き換える
+                    const placeholder = watch_player_container.querySelector<HTMLDivElement>('.watch-player__dplayer');
+                    if (placeholder) {
+                        watch_player_container.replaceChild(dplayer_element, placeholder);
+                    }
+                }
+            }
+
+            // BML ブラウザのコンテナを再表示する (minimizePlayer() で非表示にしたものを元に戻す)
+            const bml_browser_container = document.querySelector<HTMLDivElement>('.dplayer-bml-browser');
+            if (bml_browser_container) {
+                bml_browser_container.style.display = '';
+            }
+
+            // ミニプレイヤーの状態をリセット
+            this.is_mini_player = false;
+            this.mini_player_state = null;
+
+            console.log('[PlayerStore] Mini player deactivated, restored to full player.');
+        },
+
+        /**
+         * ミニプレイヤーを完全に閉じて再生を停止する
+         * PlayerController を破棄し、すべてのミニプレイヤー関連状態をリセットする
+         */
+        async closeMiniPlayer(): Promise<void> {
+            const controller = getActivePlayerController();
+            if (controller) {
+                await controller.destroy();
+                setActivePlayerController(null);
+            }
+
+            // ミニプレイヤーコンテナ内の DPlayer DOM を削除
+            const mini_player_container = document.getElementById('mini-player-persistent-container');
+            if (mini_player_container) {
+                mini_player_container.innerHTML = '';
+            }
+
+            // 状態をリセット
+            this.is_mini_player = false;
+            this.mini_player_state = null;
+            this.is_watching = false;
+            this.is_player_initialized = false;
+
+            console.log('[PlayerStore] Mini player closed and destroyed.');
+        },
     }
 });
 

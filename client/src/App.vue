@@ -4,10 +4,16 @@
             <component :is="Component" />
         </router-view>
         <Snackbars />
+        <!-- ミニプレイヤー: 視聴画面から他ページに遷移しても再生を継続する YouTube 風の小窓プレイヤー -->
+        <MiniPlayer />
+        <!-- ミニプレイヤーモード時に DPlayer の DOM 要素を一時的に保持する永続コンテナ -->
+        <!-- ページ遷移で Watch コンポーネントが破棄されても、この要素内に DPlayer の DOM を退避させることで再生を維持する -->
+        <div id="mini-player-persistent-container" style="display: none;"></div>
     </v-app>
 </template>
 <script lang="ts" setup>
 
+import MiniPlayer from '@/components/MiniPlayer.vue';
 import Snackbars from '@/components/Snackbars.vue';
 
 </script>

@@ -9,13 +9,9 @@ import { defineComponent } from 'vue';
 import Watch from '@/components/Watch/Watch.vue';
 import PlayerController from '@/services/player/PlayerController';
 import useChannelsStore from '@/stores/ChannelsStore';
-import usePlayerStore from '@/stores/PlayerStore';
+import usePlayerStore, { getActivePlayerController, setActivePlayerController } from '@/stores/PlayerStore';
 import useSettingsStore from '@/stores/SettingsStore';
 import Utils from '@/utils';
-
-// PlayerController のインスタンス
-// data() 内に記述すると再帰的にリアクティブ化され重くなる上リアクティブにする必要自体がないので、グローバル変数にしている
-let player_controller: PlayerController | null = null;
 
 export default defineComponent({
     name: 'TV-Watch',
@@ -28,6 +24,9 @@ export default defineComponent({
             // ページ遷移時に setInterval(), setTimeout() の実行を止めるのに使う
             // setInterval(), setTimeout() の返り値を登録する
             interval_ids: [] as number[],
+            // ミニプレイヤーからの復帰中かどうか
+            // created() で判定し、mounted() で DOM 操作を行うために保持する
+            is_restoring_from_mini_player: false,
         };
     },
     computed: {
@@ -41,8 +40,39 @@ export default defineComponent({
         // チャンネル ID をセット
         this.channelsStore.display_channel_id = this.$route.params.display_channel_id as string;
 
+        // ミニプレイヤーからの復帰かどうかを判定する
+        // ミニプレイヤーで同じチャンネルを再生中であれば、PlayerController を破棄せずにそのまま引き継ぐ
+        const existing_controller = getActivePlayerController();
+        const mini_player_state = this.playerStore.mini_player_state;
+        if (existing_controller && this.playerStore.is_mini_player && mini_player_state &&
+            mini_player_state.playback_mode === 'Live' &&
+            mini_player_state.channel_id === this.$route.params.display_channel_id) {
+
+            // ミニプレイヤーから復帰: フラグを立てて mounted() で DOM 操作を行う
+            // created() 時点では Watch コンポーネントの DOM がまだ存在しないため、
+            // DPlayer の DOM 要素を視聴画面に戻す操作は mounted() まで遅延させる必要がある
+            this.is_restoring_from_mini_player = true;
+
+            // チャンネル情報の定期更新タイマーを再開する
+            this.startChannelUpdateTimers();
+            return;
+        }
+
+        // ミニプレイヤーが別のチャンネルまたは別のモードで再生中の場合は、先にミニプレイヤーを��じる
+        if (this.playerStore.is_mini_player) {
+            this.playerStore.closeMiniPlayer();
+        }
+
         // 再生セッションを初期化
         this.init();
+    },
+    // DOM がマウントされた後に実行
+    mounted() {
+        // ミニプレイヤーからの復帰時: DOM が準備できたので DPlayer の DOM 要素を視聴画面に戻す
+        if (this.is_restoring_from_mini_player) {
+            this.playerStore.restoreFromMiniPlayer();
+            this.is_restoring_from_mini_player = false;
+        }
     },
     // チャンネル切り替え時に実行
     // コンポーネント（インスタンス）は再利用される
@@ -80,6 +110,17 @@ export default defineComponent({
     // 終了前に実行
     beforeUnmount() {
 
+        // ミニプレイヤーモードに移行中の場合は、PlayerController を破棄せずに保持する
+        // DPlayer の DOM 要素は既に minimizePlayer() で永続コンテナに退避済みなので、ここでは破棄しない
+        if (this.playerStore.is_mini_player) {
+            // タイマーだけは停止する (チャンネル情報の定期更新はミニプレイヤーでは不要)
+            for (const interval_id of this.interval_ids) {
+                window.clearInterval(interval_id);
+            }
+            this.interval_ids = [];
+            return;
+        }
+
         // destroy() を実行
         // 別のページへ遷移するため、DPlayer のインスタンスを確実に破棄する
         // さもなければ、ブラウザがリロードされるまでバックグラウンドで永遠に再生され続けてしまう
@@ -92,26 +133,27 @@ export default defineComponent({
     },
     methods: {
 
-        // 再生セッションを初期化する
-        async init() {
-
+        // チャンネル情報の定期更新タイマーを開始する
+        // ミニプレイヤーからの復帰時にも使用する
+        startChannelUpdateTimers() {
             // 00秒までの残り秒数を取得
-            // 現在 16:01:34 なら 26 (秒) になる
             const residue_second = 60 - new Date().getSeconds();
 
             // 00秒になるまで待ってから実行するタイマー
-            // 番組は基本1分単位で組まれているため、20秒や45秒など中途半端な秒数で更新してしまうと番組情報の反映が遅れてしまう
             this.interval_ids.push(window.setTimeout(() => {
-
-                // この時点で00秒なので、チャンネル情報を更新
                 this.channelsStore.update(true);
-
                 // 以降、30秒おきにチャンネル情報を更新
                 this.interval_ids.push(window.setInterval(() => {
                     this.channelsStore.update(true);
                 }, 30 * 1000));
-
             }, residue_second * 1000));
+        },
+
+        // 再生セッションを初期化する
+        async init() {
+
+            // チャンネル情報の定期更新タイマーを開始
+            this.startChannelUpdateTimers();
 
             // チャンネル情報を更新 (初回)
             await this.channelsStore.update();
@@ -131,9 +173,10 @@ export default defineComponent({
                 return;
             }
 
-            // PlayerController を初期化
-            player_controller = new PlayerController('Live');
-            await player_controller.init();
+            // PlayerController を初期化し、グローバル参照にも設定する
+            const controller = new PlayerController('Live');
+            setActivePlayerController(controller);
+            await controller.init();
         },
 
         // 再生セッションを破棄する
@@ -150,9 +193,10 @@ export default defineComponent({
             this.interval_ids = [];
 
             // PlayerController を破棄
-            if (player_controller !== null) {
-                await player_controller.destroy();
-                player_controller = null;
+            const controller = getActivePlayerController();
+            if (controller !== null) {
+                await controller.destroy();
+                setActivePlayerController(null);
             }
         }
     }

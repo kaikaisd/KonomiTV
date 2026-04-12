@@ -91,12 +91,29 @@ export default defineComponent({
             };
         }
 
-        // PlayerStore に視聴画面を開いたことを伝える
-        // 視聴画面に入るまでに変更されているかもしれない初期値を反映させる
-        this.playerStore.startWatching();
+        // ミニプレイヤーからの復帰時は startWatching() のリセットを行わない
+        // (PlayerController が既に初期化済みの状態を維持するため)
+        if (this.playerStore.is_mini_player) {
+            // is_watching だけ true に設定する (リセットはしない)
+            this.playerStore.is_watching = true;
+        } else {
+            // 通常の視聴画面開始: PlayerStore に視聴画面を開いたことを伝える
+            // 視聴画面に入るまでに変更されているかもしれない初期値を反映させる
+            this.playerStore.startWatching();
+        }
     },
     // 終了前に実行
     beforeUnmount() {
+
+        // ミニプレイヤーモードに移行中の場合は、テーマを戻すだけで PlayerStore の状態はリセットしない
+        // 再生を継続するため、stopWatching() は呼ばない
+        if (this.playerStore.is_mini_player) {
+            applyThemeMode(this.settingsStore.settings.theme_mode);
+            if ('virtualKeyboard' in navigator) {
+                navigator.virtualKeyboard.overlaysContent = false;
+            }
+            return;
+        }
 
         // 視聴画面を離れる際に、ユーザーが設定しているテーマモードに戻す
         applyThemeMode(this.settingsStore.settings.theme_mode);

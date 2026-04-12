@@ -394,6 +394,8 @@ class LiveDataBroadcastingManager implements PlayerManager {
             this.resize_observer = new ResizeObserver((entries: ResizeObserverEntry[]) => {
                 // データ放送画面の拡大/縮小率を再計算
                 const entry = entries[0];
+                // ミニプレイヤーへの DOM 移動中にコンテナサイズが 0 になることがあるため、0 の場合はスキップする
+                if (entry.contentRect.width === 0 || entry.contentRect.height === 0) return;
                 this.calculateBMLBrowserScaleFactor(entry.contentRect.width, entry.contentRect.height);
             });
             this.resize_observer.observe(this.player.template.videoWrap);

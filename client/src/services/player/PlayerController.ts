@@ -1800,6 +1800,9 @@ class PlayerController {
         // プレイヤー全体のコンテナ要素がリサイズされた際に発火するイベント
         const resize_handler = () => {
 
+            // ミニプレイヤーへの DOM 移動中にコンテナサイズが 0 になることがあるため、0 の場合はスキップする
+            if (player_container_element.clientWidth === 0 || player_container_element.clientHeight === 0) return;
+
             // コメント描画領域の要素
             if (this.player === null) return;
             const comment_area_element = this.player.danmaku!.container;

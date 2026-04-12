@@ -12,6 +12,11 @@
             {{ProgramUtils.getProgramTime(playback_mode === 'Live' ? channelsStore.channel.current.program_present : playerStore.recorded_program, true)}}
         </span>
         <v-spacer></v-spacer>
+        <!-- ミニプレイヤー化ボタン: クリックすると視聴画面をミニプレイヤーに縮小して他のページを閲覧できる -->
+        <button class="watch-header__minimize-button" v-ripple
+            v-ftooltip.bottom="'ミニプレイヤー'" @click.stop="minimizePlayer">
+            <Icon icon="fluent:picture-in-picture-exit-20-filled" width="20px" />
+        </button>
         <span class="watch-header__now">
             <Icon v-if="is_showing_original_broadcast_time" class="watch-header__timeshift-icon" icon="fluent:history-16-regular" width="16px" />
             {{time}}
@@ -26,7 +31,7 @@ import { defineComponent, PropType } from 'vue';
 import type { Dayjs } from 'dayjs';
 
 import useChannelsStore from '@/stores/ChannelsStore';
-import usePlayerStore from '@/stores/PlayerStore';
+import usePlayerStore, { IMiniPlayerState } from '@/stores/PlayerStore';
 import useSettingsStore from '@/stores/SettingsStore';
 import Utils, { dayjs, ProgramUtils } from '@/utils';
 
@@ -99,6 +104,31 @@ export default defineComponent({
             setTimeout(() => {
                 this.uptimeTime();
             }, this.updateTimeCore());
+        },
+        // 視聴画面をミニプレイヤーに縮小する
+        minimizePlayer() {
+            // 現在の再生情報からミニプレイヤーの状態を構築する
+            const is_live = this.playback_mode === 'Live';
+            const title = is_live
+                ? (this.channelsStore.channel.current.program_present?.title ?? this.channelsStore.channel.current.name)
+                : this.playerStore.recorded_program.title;
+            const channel_id = is_live ? this.channelsStore.display_channel_id : null;
+            const video_id = is_live ? null : this.playerStore.recorded_program.id;
+            const route_path = this.$route.fullPath;
+
+            const state: IMiniPlayerState = {
+                playback_mode: this.playback_mode,
+                route_path: route_path,
+                title: title,
+                channel_id: channel_id,
+                video_id: video_id,
+            };
+
+            // ミニプレイ���ーモードに移行 (DPlayer の DOM を永続コンテナに退避する)
+            this.playerStore.minimizePlayer(state);
+
+            // 元のページ (テレビホームまたはビデオホーム) に遷移する
+            this.$router.push({ path: is_live ? '/tv/' : '/videos/' });
         },
     },
     created() {
@@ -277,6 +307,39 @@ export default defineComponent({
         @include smartphone-vertical {
             margin-left: 8px;
             font-size: 13px;
+        }
+    }
+
+    .watch-header__minimize-button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        width: 36px;
+        height: 36px;
+        margin-left: 8px;
+        border: none;
+        border-radius: 50%;
+        background: transparent;
+        color: rgb(var(--v-theme-text));
+        cursor: pointer;
+        transition: background-color 0.15s ease;
+        opacity: 0.85;
+
+        &:hover {
+            background: rgba(var(--v-theme-text), 0.1);
+            opacity: 1;
+        }
+
+        @include smartphone-vertical {
+            width: 32px;
+            height: 32px;
+            margin-left: 4px;
+        }
+
+        // Document Picture-in-Picture ウインドウでは非表示
+        @media all and (display-mode: picture-in-picture) {
+            display: none;
         }
     }
 
