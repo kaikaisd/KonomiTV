@@ -64,7 +64,14 @@ watch(() => playerStore.is_mini_player, async (is_active) => {
         const persistent_container = document.getElementById('mini-player-persistent-container');
         if (persistent_container && videoContainer.value) {
             videoContainer.value.appendChild(persistent_container);
+            // minimizePlayer() で設定した画面外配置のスタイルをリセットし、
+            // ミニプレイヤーの映像エリア内に正しく表示させる
             persistent_container.style.display = 'block';
+            persistent_container.style.position = '';
+            persistent_container.style.top = '';
+            persistent_container.style.width = '';
+            persistent_container.style.height = '';
+            persistent_container.style.overflow = '';
         }
     }
 });

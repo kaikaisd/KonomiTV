@@ -310,9 +310,17 @@ const usePlayerStore = defineStore('player', {
             }
 
             // DPlayer の DOM 要素をミニプレイヤーコンテナに移動する
+            // display: none にすると <video> のデコーダが停止し映像が黒くなるため、
+            // 代わりに画面外に配置して非表示にしつつデコードを継続させる
             const dplayer_element = document.querySelector<HTMLDivElement>('.watch-player__dplayer');
             const mini_player_container = document.getElementById('mini-player-persistent-container');
             if (dplayer_element && mini_player_container) {
+                mini_player_container.style.display = 'block';
+                mini_player_container.style.position = 'fixed';
+                mini_player_container.style.top = '-9999px';
+                mini_player_container.style.width = '1px';
+                mini_player_container.style.height = '1px';
+                mini_player_container.style.overflow = 'hidden';
                 mini_player_container.appendChild(dplayer_element);
             }
 
@@ -340,6 +348,13 @@ const usePlayerStore = defineStore('player', {
                         watch_player_container.replaceChild(dplayer_element, placeholder);
                     }
                 }
+                // minimizePlayer() で設定した画面外配置のスタイルをリセットする
+                mini_player_container.style.display = 'none';
+                mini_player_container.style.position = '';
+                mini_player_container.style.top = '';
+                mini_player_container.style.width = '';
+                mini_player_container.style.height = '';
+                mini_player_container.style.overflow = '';
             }
 
             // BML ブラウザのコンテナを再表示する (minimizePlayer() で非表示にしたものを元に戻す)
@@ -366,10 +381,16 @@ const usePlayerStore = defineStore('player', {
                 setActivePlayerController(null);
             }
 
-            // ミニプレイヤーコンテナ内の DPlayer DOM を削除
+            // ミニプレイヤーコンテナ内の DPlayer DOM を削除し、スタイルをリセットする
             const mini_player_container = document.getElementById('mini-player-persistent-container');
             if (mini_player_container) {
                 mini_player_container.innerHTML = '';
+                mini_player_container.style.display = 'none';
+                mini_player_container.style.position = '';
+                mini_player_container.style.top = '';
+                mini_player_container.style.width = '';
+                mini_player_container.style.height = '';
+                mini_player_container.style.overflow = '';
             }
 
             // 状態をリセット
