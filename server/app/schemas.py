@@ -159,14 +159,13 @@ class RecordedVideo(PydanticModel):
     video_frame_rate: float
     video_resolution_width: int
     video_resolution_height: int
+    has_video_stream_changes: bool = False
     primary_audio_codec: Literal['AAC-LC']
     primary_audio_channel: Literal['Monaural', 'Stereo', '5.1ch']
     primary_audio_sampling_rate: int
     secondary_audio_codec: Literal['AAC-LC'] | None = None
     secondary_audio_channel: Literal['Monaural', 'Stereo', '5.1ch'] | None = None
     secondary_audio_sampling_rate: int | None = None
-    # key_frames はデータ量が多いため、キーフレーム情報を取得できているかを表す has_key_frames のみ返す
-    has_key_frames: bool = False
     cm_sections: list[CMSection] | None = None
     thumbnail_info: ThumbnailInfo | None = None
     created_at: datetime
@@ -175,6 +174,11 @@ class RecordedVideo(PydanticModel):
 class KeyFrame(TypedDict):
     offset: int
     dts: int
+
+class SegmentMapEntry(TypedDict):
+    sequence_index: int
+    source_file_position: int
+    source_start_dts: int
 
 class CMSection(TypedDict):
     start_time: float
@@ -294,18 +298,36 @@ class User(PydanticModel):
     niconico_user_name: str | None
     niconico_user_premium: bool | None
     twitter_accounts: list[TwitterAccount]  # 追加カラム
+    bluesky_accounts: list[BlueskyAccount]  # 追加カラム
+    account_links: list[AccountLink]  # 追加カラム
+    created_at: datetime
+    updated_at: datetime
+
+class AccountLink(PydanticModel):
+    id: int
+    twitter_account: TwitterAccount
+    bluesky_account: BlueskyAccount
     created_at: datetime
     updated_at: datetime
 
 class Users(RootModel[list[User]]):
     pass
 
-# ***** Twitter 連携 *****
+# ***** Twitter / Bluesky 連携 *****
 
 class TwitterAccount(PydanticModel):
     id: int
     name: str
     screen_name: str
+    icon_url: str
+    created_at: datetime
+    updated_at: datetime
+
+class BlueskyAccount(PydanticModel):
+    id: int
+    did: str
+    handle: str
+    name: str
     icon_url: str
     created_at: datetime
     updated_at: datetime
@@ -451,10 +473,49 @@ class UserUpdateRequest(BaseModel):
 class UserUpdateRequestForAdmin(BaseModel):
     is_admin: bool | None = None
 
+class AccountLinkCreateRequest(BaseModel):
+    twitter_account_id: int
+    bluesky_account_id: int
+
 # ***** Twitter 連携 *****
 
 class TwitterCookieAuthRequest(BaseModel):
     cookies_txt: str
+    browser_info: BrowserEnvironmentInfoRequest | None = None
+
+class BrowserEnvironmentInfoRequest(BaseModel):
+    user_agent_data: BrowserEnvironmentUserAgentData
+    navigator_platform: str
+    locale: str
+    timezone: str
+
+class BrowserEnvironmentInfo(TypedDict):
+    http_headers: BrowserEnvironmentHTTPHeaders  # /api/twitter/auth の HTTP リクエストヘッダーから抽出した情報
+    user_agent_data: BrowserEnvironmentUserAgentData
+    navigator_platform: str
+    locale: str
+    timezone: str
+
+class BrowserEnvironmentHTTPHeaders(TypedDict):
+    user_agent: str | None
+    accept_language: str | None
+    accept_languages: list[str]
+    sec_ch_ua: str | None
+    sec_ch_ua_mobile: str | None
+    sec_ch_ua_platform: str | None
+
+class BrowserEnvironmentUserAgentData(TypedDict):
+    platform: str
+    platform_version: str
+    architecture: str
+    bitness: str
+    mobile: bool
+    model: str
+    wow64: bool
+
+class BlueskyAuthRequest(BaseModel):
+    handle: str
+    app_password: str
 
 # モデルに関連しない API レスポンスの構造を表す Pydantic モデル
 ## レスポンスボディの JSON 構造と一致する
@@ -566,12 +627,14 @@ class ProgramSearchCondition(BaseModel):
     duration_range_max: Annotated[int, Field(ge=0)] | None = None
     # 番組の放送種別で絞り込む: すべて / 無料のみ / 有料のみ
     broadcast_type: Literal['All', 'FreeOnly', 'PaidOnly'] = 'All'
-    # 同じ番組名の既存録画との重複チェック: 何もしない / 同じチャンネルのみ対象にする / 全てのチャンネルを対象にする
+    # キーワード自動予約で、同じ番組名の既存録画がある予約を無効化するかどうか
+    ## EDCB の番組検索ではこの値は参照されず、自動予約登録時のみ使われる
+    ## None: 何もしない / SameChannelOnly: 同じチャンネルのみ対象 / AllChannels: 全てのチャンネルを対象
     ## 同じチャンネルのみ対象にする: 同じチャンネルで同名の番組が既に録画されていれば、新しい予約を無効状態で登録する
     ## 全てのチャンネルを対象にする: 任意のチャンネルで同名の番組が既に録画されていれば、新しい予約を無効状態で登録する
     ## 仕様上予約自体を削除してしまうとすぐ再登録されてしまうので、無効状態で登録することで有効になるのを防いでいるらしい
     duplicate_title_check_scope: Literal['None', 'SameChannelOnly', 'AllChannels'] = 'None'
-    # 同じ番組名の既存録画との重複チェックの対象期間 (日単位)
+    # キーワード自動予約で既存録画を探す対象期間 (日単位)
     duplicate_title_check_period_days: Annotated[int, Field(ge=0)] = 6
 
 # 番組検索条件のチャンネル
@@ -730,6 +793,7 @@ class ThirdpartyAuthURL(BaseModel):
 # ***** Twitter 連携 *****
 
 class Tweet(BaseModel):
+    source: Literal['Twitter', 'Bluesky']
     id: str
     created_at: datetime
     user: TweetUser
@@ -746,6 +810,7 @@ class Tweet(BaseModel):
     quoted_tweet: Tweet | None
 
 class TweetUser(BaseModel):
+    source: Literal['Twitter', 'Bluesky']
     id: str
     name: str
     screen_name: str
@@ -757,11 +822,22 @@ class TwitterAPIResult(BaseModel):
 
 class PostTweetResult(TwitterAPIResult):
     tweet_url: str
+    tweet_id: str | None = None
+    post_uri: str | None = None
+    post_cid: str | None = None
+
+class TimelineLoadMoreCursor(BaseModel):
+    cursor_type: Literal['Older', 'Gap', 'ShowMore']
+    cursor_id: str
+    entry_id: str | None
+    upper_created_at: datetime | None
+    lower_created_at: datetime | None
 
 class TimelineTweetsResult(TwitterAPIResult):
-    next_cursor_id: str
-    previous_cursor_id: str
     tweets: list[Tweet]
+    newer_cursor_id: str | None
+    load_more_cursors: list[TimelineLoadMoreCursor]
+    is_cursor_consumed: bool
 
 class TwitterGraphQLAPIEndpointInfo(BaseModel):
     method: Literal['GET', 'POST']

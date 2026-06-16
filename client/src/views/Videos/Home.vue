@@ -289,7 +289,7 @@ const sectionUpdaters = {
 } as const;
 
 // 現在表示中のいずれかの番組がバックグラウンド解析中かどうかを返す
-// has_key_frames が false かつ AnalysisFailed でない場合、解析がまだ完了していない
+// thumbnail_info が null かつ AnalysisFailed でない場合、サムネイル生成などのバックグラウンド解析がまだ完了していない
 const hasAnalyzingPrograms = () => {
     const allPrograms = [
         ...recent_programs.value,
@@ -297,7 +297,7 @@ const hasAnalyzingPrograms = () => {
         ...watched_programs.value,
     ];
     return allPrograms.some(
-        p => !p.recorded_video.has_key_frames && p.recorded_video.status !== 'AnalysisFailed',
+        p => p.recorded_video.thumbnail_info === null && p.recorded_video.status !== 'AnalysisFailed',
     );
 };
 
@@ -364,6 +364,7 @@ onUnmounted(() => {
     display: flex;
     flex-direction: column;
     width: 100%;
+    min-width: 0;  // サイドナビゲーション横のフレックス子要素を親幅内で縮め、タブレット縦画面でのはみ出しを防ぐ
 }
 
 .videos-home-container {
