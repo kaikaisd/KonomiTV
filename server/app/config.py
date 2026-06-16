@@ -361,6 +361,8 @@ class _ServerSettingsNotification(BaseModel):
     # カスタム通知テンプレート (空文字列の場合はデフォルトの MarkdownV2 形式を使用)
     # 使用可能な変数: {title} {channel} {date} {start_time} {end_time} {duration}(分付き) {description} {file_size}
     telegram_notification_template: str = ''
+    # 通知をサイレント (通知音なし) で送信するかどうか
+    telegram_silent_notification: bool = False
 
 class _ServerSettingsRecording(BaseModel):
     # 録画終了時に番組終了時刻へ加算するマージン (秒)

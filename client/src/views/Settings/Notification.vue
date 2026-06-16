@@ -104,6 +104,16 @@
                     </v-btn>
                 </div>
                 <v-divider class="mt-6" />
+                <div class="settings__item settings__item--switch">
+                    <div class="settings__item-heading">サイレント通知</div>
+                    <div class="settings__item-label">
+                        有効にすると、通知音を鳴らさずにメッセージを送信します。
+                    </div>
+                    <v-switch class="settings__item-switch" color="primary" hide-details
+                        v-model="server_settings.notification.telegram_silent_notification"
+                        @update:modelValue="onSettingChanged()" />
+                </div>
+                <v-divider class="mt-6" />
                 <div class="settings__item">
                     <div class="settings__item-heading">テスト通知を送信</div>
                     <div class="settings__item-label">

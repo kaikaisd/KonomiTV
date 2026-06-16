@@ -215,6 +215,7 @@ class TelegramNotifier:
         base_url: str,
         notification_template: str = '',
         is_partially_recorded: bool = False,
+        silent: bool = False,
     ) -> bool:
         """
         録画完了通知を Telegram に送信する。
@@ -236,6 +237,7 @@ class TelegramNotifier:
             recorded_program_id (int): 録画番組 ID (再生 URL の生成に使用)
             base_url (str): KonomiTV の公開ベース URL (空文字列の場合は再生ボタンを省略)
             notification_template (str): カスタム通知テンプレート (空文字列の場合はデフォルトの MarkdownV2 形式を使用)
+            silent (bool): True の場合、通知音を鳴らさずにメッセージを送信する (Telegram の disable_notification に対応)
 
         Returns:
             bool: 送信に成功した場合は True、失敗した場合は False
@@ -296,6 +298,7 @@ class TelegramNotifier:
                         'chat_id': chat_id,
                         'caption': caption,
                         'parse_mode': parse_mode,
+                        'disable_notification': silent,
                     }
                     if reply_markup is not None:
                         data['reply_markup'] = json.dumps(reply_markup)
@@ -311,6 +314,7 @@ class TelegramNotifier:
                         'chat_id': chat_id,
                         'text': caption,
                         'parse_mode': parse_mode,
+                        'disable_notification': silent,
                     }
                     if reply_markup is not None:
                         payload['reply_markup'] = reply_markup

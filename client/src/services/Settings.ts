@@ -136,6 +136,7 @@ export interface IServerSettings {
         telegram_chat_id: string;
         telegram_base_url: string;
         telegram_notification_template: string;
+        telegram_silent_notification: boolean;
     };
     recording: {
         end_margin_seconds: number;
@@ -200,6 +201,7 @@ export const IServerSettingsDefault: IServerSettings = {
         telegram_chat_id: '',
         telegram_base_url: '',
         telegram_notification_template: '',
+        telegram_silent_notification: false,
     },
     recording: {
         end_margin_seconds: 5,

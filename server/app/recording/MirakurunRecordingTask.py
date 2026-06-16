@@ -562,6 +562,7 @@ class MirakurunRecordingTask:
                 base_url = cfg.telegram_base_url,
                 notification_template = cfg.telegram_notification_template,
                 is_partially_recorded = is_partially_recorded,
+                silent = cfg.telegram_silent_notification,
             )
 
             # 通知送信完了後、予約ステータスが Completed になっていることを確認・保証する。
