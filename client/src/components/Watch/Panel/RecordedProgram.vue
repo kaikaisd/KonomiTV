@@ -40,16 +40,34 @@
                     <span class="ml-2">コメント数:</span>
                     <span class="ml-2">{{comment_count ?? '--'}}</span>
                 </div>
-                <div v-ripple class="program-info__button" @click="toggleMylist">
-                    <template v-if="isInMylist">
-                        <Icon icon="fluent:checkmark-16-filled" width="18px" height="18px"
-                            style="color: rgb(var(--v-theme-primary)); margin-bottom: -1px" />
-                        <span style="margin-left: 6px;">マイリストに追加済み</span>
-                    </template>
-                    <template v-else>
-                        <Icon icon="fluent:add-16-filled" width="18px" height="18px" style="margin-bottom: -1px" />
-                        <span style="margin-left: 6px;">マイリストに追加</span>
-                    </template>
+                <div class="program-info__buttons">
+                    <div v-ripple class="program-info__button" @click="toggleMylist">
+                        <template v-if="isInMylist">
+                            <Icon icon="fluent:checkmark-16-filled" width="18px" height="18px"
+                                style="color: rgb(var(--v-theme-primary)); margin-bottom: -1px" />
+                            <span style="margin-left: 6px;">マイリストに追加済み</span>
+                        </template>
+                        <template v-else>
+                            <Icon icon="fluent:add-16-filled" width="18px" height="18px" style="margin-bottom: -1px" />
+                            <span style="margin-left: 6px;">マイリストに追加</span>
+                        </template>
+                    </div>
+                    <div v-ripple class="program-info__button" @click="showOfflineDownload = true">
+                        <template v-if="isOfflineDownloading">
+                            <Icon icon="fluent:cloud-arrow-down-20-filled" width="18px" height="18px"
+                                style="color: rgb(var(--v-theme-primary)); margin-bottom: -1px" />
+                            <span style="margin-left: 6px;">オフライン保存中</span>
+                        </template>
+                        <template v-else-if="isOfflineSaved">
+                            <Icon icon="fluent:checkmark-16-filled" width="18px" height="18px"
+                                style="color: rgb(var(--v-theme-primary)); margin-bottom: -1px" />
+                            <span style="margin-left: 6px;">オフライン保存済み</span>
+                        </template>
+                        <template v-else>
+                            <Icon icon="fluent:cloud-arrow-down-20-regular" width="18px" height="18px" />
+                            <span style="margin-left: 6px;">オフライン保存</span>
+                        </template>
+                    </div>
                 </div>
             </div>
         </section>
@@ -60,6 +78,7 @@
                 <div class="program-detail__text" v-html="Utils.URLtoLink(detail_text)"></div>
             </div>
         </section>
+        <OfflineVideoDownloadDialog :program="playerStore.recorded_program" v-model:show="showOfflineDownload" />
     </div>
 </template>
 <script lang="ts">
@@ -67,13 +86,18 @@
 import { mapStores } from 'pinia';
 import { defineComponent } from 'vue';
 
+import OfflineVideoDownloadDialog from '@/components/Videos/Dialogs/OfflineVideoDownloadDialog.vue';
 import Message from '@/message';
+import OfflineVideos, { type IOfflineDownloadJob, type IOfflineVideo } from '@/services/OfflineVideos';
 import usePlayerStore from '@/stores/PlayerStore';
 import useSettingsStore from '@/stores/SettingsStore';
 import Utils, { ProgramUtils } from '@/utils';
 
 export default defineComponent({
     name: 'Panel-RecordedProgramTab',
+    components: {
+        OfflineVideoDownloadDialog,
+    },
     data() {
         return {
             // ユーティリティをテンプレートで使えるように
@@ -82,6 +106,18 @@ export default defineComponent({
 
             // コメント数カウント
             comment_count: null as number | null,
+
+            // オフライン保存ダイアログの表示状態
+            showOfflineDownload: false,
+
+            // IndexedDB 上のオフライン保存済み動画 (存在しない場合は null)
+            offlineVideo: null as IOfflineVideo | null,
+
+            // 実行中のオフライン保存ジョブ (存在しない場合は null)
+            offlineDownloadJob: null as IOfflineDownloadJob | null,
+
+            // OfflineVideos.change リスナー解除用 (Options API で this 束縛を保つ)
+            onOfflineVideosChange: null as (() => void) | null,
         };
     },
     computed: {
@@ -93,8 +129,56 @@ export default defineComponent({
                 item.type === 'RecordedProgram' && item.id === this.playerStore.recorded_program.id
             );
         },
+
+        // オフライン保存済みかどうか
+        isOfflineSaved(): boolean {
+            // オフライン再生中は PlayerStore 側に保存済み動画が載っている
+            return this.offlineVideo !== null || this.playerStore.offline_video !== null;
+        },
+
+        // オフライン保存中かどうか
+        isOfflineDownloading(): boolean {
+            return this.offlineDownloadJob !== null;
+        },
+    },
+    watch: {
+        // init() 完了後に recorded_program.id が確定するため、ID 変化を契機に IndexedDB から読み直す
+        'playerStore.recorded_program.id': {
+            handler(id: number) {
+                if (id <= 0) {
+                    this.offlineVideo = null;
+                    this.offlineDownloadJob = null;
+                    return;
+                }
+                void this.refreshOfflineState();
+            },
+            immediate: true,
+        },
+
+        // ダイアログを閉じた直後もボタン表示を最新化する
+        showOfflineDownload(show: boolean) {
+            if (show === false && this.playerStore.recorded_program.id > 0) {
+                void this.refreshOfflineState();
+            }
+        },
     },
     methods: {
+        // IndexedDB から現在の番組のオフライン保存状態を読み直す
+        async refreshOfflineState(): Promise<void> {
+            try {
+                const videoID = this.playerStore.recorded_program.id;
+                const [offlineVideo, offlineDownloadJob] = await Promise.all([
+                    OfflineVideos.getVideo(videoID),
+                    OfflineVideos.getActiveJobForVideo(videoID),
+                ]);
+                this.offlineVideo = offlineVideo;
+                this.offlineDownloadJob = offlineDownloadJob;
+            } catch (error) {
+                // 一時的な読み取り失敗で視聴パネル全体の描画を止めない
+                console.warn('[Panel-RecordedProgramTab] Failed to read offline state:', error);
+            }
+        },
+
         // マイリストの追加/削除を切り替える
         toggleMylist(): void {
             const program = this.playerStore.recorded_program;
@@ -114,17 +198,27 @@ export default defineComponent({
             }
         },
     },
-    created() {
+    async created() {
         // PlayerController 側からCommentReceived イベントで過去ログコメントを受け取り、コメント数を算出する
         this.playerStore.event_emitter.on('CommentReceived', (event) => {
             if (event.is_initial_comments === true) {  // 録画では初期コメントしか発生しない
                 this.comment_count = event.comments.length;
             }
         });
+
+        // オフライン保存の追加・削除・保存し直し後にボタン表示を更新する
+        // Options API のメソッドをそのまま渡すと this が EventTarget 側に向くため、ラムダで包む
+        this.onOfflineVideosChange = () => {
+            void this.refreshOfflineState();
+        };
+        OfflineVideos.eventTarget.addEventListener('change', this.onOfflineVideosChange);
     },
     beforeUnmount() {
         // CommentReceived イベントの全てのイベントハンドラーを削除
         this.playerStore.event_emitter.off('CommentReceived');
+        if (this.onOfflineVideosChange !== null) {
+            OfflineVideos.eventTarget.removeEventListener('change', this.onOfflineVideosChange);
+        }
     },
 });
 
@@ -255,11 +349,36 @@ export default defineComponent({
             }
         }
 
-        .program-info__button {
-            display: inline-flex;
-            align-items: center;
-            padding: 5px 8px;
+        .program-info__buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
             margin-top: 16px;
+
+            // PC・タブレット横画面・スマホ横画面はパネル幅が狭く、長いラベルで折り返しチラつきが起きるため縦並び固定
+            // align-items: stretch (既定) だとボタンがパネル全幅に引き延ばされるので flex-start にする
+            @include desktop {
+                flex-direction: column;
+                flex-wrap: nowrap;
+                align-items: flex-start;
+            }
+            @include tablet-horizontal {
+                flex-direction: column;
+                flex-wrap: nowrap;
+                align-items: flex-start;
+            }
+            @include smartphone-horizontal {
+                flex-direction: column;
+                flex-wrap: nowrap;
+                align-items: flex-start;
+            }
+        }
+
+        .program-info__button {
+            display: flex;
+            align-items: center;
+            width: fit-content;
+            padding: 5px 8px;
             color: rgb(var(--v-theme-text-darken-1));
             font-size: 12.7px;
             line-height: 170%;

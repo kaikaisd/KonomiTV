@@ -57,6 +57,18 @@
                         <Icon class="navigation__link-icon" icon="fluent:image-multiple-24-regular" width="26px" />
                         <span v-if="!iconOnly" class="navigation__link-text">キャプチャ</span>
                     </router-link>
+                    <router-link v-ripple class="navigation__link" active-class="navigation__link--active" to="/offline-videos/"
+                        :class="{
+                            'navigation__link--active': $route.path.startsWith('/offline-videos'),
+                            'navigation__link--icon-only': iconOnly,
+                        }"
+                        v-ftooltip.right="iconOnly ? 'オフライン保存' : ''">
+                        <span class="navigation__link-icon-wrapper">
+                            <Icon class="navigation__link-icon" icon="fluent:cloud-arrow-down-16-regular" width="26px" />
+                            <OfflineDownloadBadge variant="overlay" />
+                        </span>
+                        <span v-if="!iconOnly" class="navigation__link-text">オフライン保存</span>
+                    </router-link>
                     <router-link v-ripple class="navigation__link" active-class="navigation__link--active" to="/mylist/"
                         :class="{
                             'navigation__link--active': $route.path.startsWith('/mylist'),
@@ -130,12 +142,14 @@ import { mapStores } from 'pinia';
 import { defineComponent } from 'vue';
 
 import BottomNavigation from '@/components/BottomNavigation.vue';
+import OfflineDownloadBadge from '@/components/OfflineDownloadBadge.vue';
 import useVersionStore from '@/stores/VersionStore';
 
 export default defineComponent({
     name: 'Navigation',
     components: {
         BottomNavigation,
+        OfflineDownloadBadge,
     },
     props: {
         // アイコンのみモード: テキストを非表示にし、幅を縮小する
@@ -179,6 +193,8 @@ export default defineComponent({
         },
     },
     async created() {
+        // オフライン保存ページは通信なしでも開くため、明らかなオフライン状態でバージョン API のエラーを表示しない
+        if (this.$route.path.startsWith('/offline-videos') && navigator.onLine === false) return;
         await this.versionStore.fetchServerVersion();
         // /cdn-cgi/access/get-identity の HTTP ステータスで CF Access の状態を判別する:
         //   200     → CF Access 認証済み: ログアウトボタンを表示する
@@ -343,11 +359,25 @@ export default defineComponent({
                     }
                 }
 
+                .navigation__link-icon-wrapper {
+                    position: relative;
+                    display: flex;
+                    flex-shrink: 0;
+                    margin-right: 14px;
+                    @include smartphone-horizontal {
+                        margin-right: 10px;
+                    }
+                }
+
                 .navigation__link-icon {
                     margin-right: 14px;
                     @include smartphone-horizontal {
                         margin-right: 10px;
                     }
+                }
+
+                .navigation__link-icon-wrapper .navigation__link-icon {
+                    margin-right: 0;
                 }
 
                 // アイコンのみモード: 正方形のアイコンボタンに変更
@@ -363,6 +393,10 @@ export default defineComponent({
                     @include smartphone-horizontal-short {
                         width: 40px;
                         height: 40px;
+                    }
+
+                    .navigation__link-icon-wrapper {
+                        margin-right: 0;
                     }
 
                     .navigation__link-icon {

@@ -103,11 +103,11 @@
                 <v-card-actions class="pt-4 px-6 pb-6">
                     <v-spacer></v-spacer>
                     <v-btn color="text" variant="text" @click="show_stop_recording_dialog = false">
-                        <Icon icon="fluent:dismiss-20-regular" width="18px" height="18px" />
+                        <Icon icon="fluent:dismiss-16-filled" width="18px" height="18px" />
                         <span class="ml-1">キャンセル</span>
                     </v-btn>
                     <v-btn class="px-3" color="error" variant="flat" @click="confirmStopRecording">
-                        <Icon icon="fluent:delete-20-regular" width="18px" height="18px" />
+                        <Icon icon="fluent:delete-16-regular" width="18px" height="18px" />
                         <span class="ml-1">録画を停止</span>
                     </v-btn>
                 </v-card-actions>
@@ -319,6 +319,11 @@ export default defineComponent({
             if (programPresent === null) {
                 return;
             }
+            // EIT[p/f] の duration が未定の場合は、EDCB に投入する録画時間を決められないため予約しない
+            if (Number.isFinite(programPresent.duration) !== true || programPresent.duration <= 0) {
+                Message.warning('この番組は放送時間が未定のため、録画予約できません。');
+                return;
+            }
             this.is_starting_recording = true;
             try {
                 // Mirakurun バックエンドでは録画設定プリセット API (/recording/presets) が EDCB 専用のため呼び出せない
@@ -326,7 +331,11 @@ export default defineComponent({
                 const defaultSettings = this.isEDCBBackend
                     ? await Reservations.fetchDefaultRecordSettings()
                     : structuredClone(IRecordSettingsDefault);
-                const result = await Reservations.addReservation(programPresent.id, defaultSettings);
+                const result = await Reservations.addReservation(
+                    programPresent.id,
+                    defaultSettings,
+                    programPresent,
+                );
                 // 予約状態を再チェックして UI を更新
                 // 予約追加に失敗した場合も、外部で既に予約済みの可能性があるため状態を再取得する
                 await this.checkReservationStatus();

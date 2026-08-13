@@ -7,6 +7,8 @@
             <v-spacer></v-spacer>
             <!-- 番組表コントロール用スロット -->
             <slot name="timetable-controls"></slot>
+            <!-- スマホ縦画面では Navigation が非表示のため、ヘッダー側にバッジを残す -->
+            <OfflineDownloadBadge class="mr-4" />
             <div v-if="showSearchButton" v-ripple class="search-button" @click="activateSearch">
                 <Icon icon="fluent:search-20-filled" height="24px" />
             </div>
@@ -30,6 +32,7 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 
+import OfflineDownloadBadge from '@/components/OfflineDownloadBadge.vue';
 import useSettingsStore from '@/stores/SettingsStore';
 
 // Props の定義
@@ -101,7 +104,8 @@ const searchPlaceholder = computed(() => {
 const isVideoSection = (path: string) => {
     return path.startsWith('/videos') ||
            path.startsWith('/mylist') ||
-           path.startsWith('/watched-history');
+           path.startsWith('/watched-history') ||
+           path.startsWith('/offline-videos');
 };
 
 // 検索パスを取得

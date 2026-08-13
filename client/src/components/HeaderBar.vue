@@ -94,6 +94,14 @@ const showSearchInput = computed(() => {
     return !path.startsWith('/settings') && !path.startsWith('/login') && !path.startsWith('/register');
 });
 
+// 録画番組関連ページ (マイリスト・視聴履歴・オフライン保存を含む) かどうか
+const isVideoSection = (path: string) => {
+    return path.startsWith('/videos') ||
+        path.startsWith('/mylist') ||
+        path.startsWith('/watched-history') ||
+        path.startsWith('/offline-videos');
+};
+
 const searchPlaceholder = computed(() => {
     if (route.path.startsWith('/timetable')) {
         return '番組表内を絞り込み...';
@@ -101,7 +109,7 @@ const searchPlaceholder = computed(() => {
     if (route.path.startsWith('/captures')) {
         return 'キャプチャを番組名やチャンネル名で検索...';
     }
-    return route.path.startsWith('/videos') || route.path.startsWith('/mylist') || route.path.startsWith('/watched-history')
+    return isVideoSection(route.path)
         ? '録画番組を検索...'
         : '放送予定の番組を検索...';
 });
@@ -110,7 +118,7 @@ const getSearchPath = () => {
     if (route.path.startsWith('/captures')) {
         return '/captures/search';
     }
-    return route.path.startsWith('/videos') || route.path.startsWith('/mylist') || route.path.startsWith('/watched-history')
+    return isVideoSection(route.path)
         ? '/videos/search'
         : '/tv/search';
 };

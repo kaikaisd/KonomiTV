@@ -55,6 +55,7 @@
                 </v-btn>
             </div>
         </div>
+        <slot name="after-header"></slot>
         <div class="recorded-program-list__grid"
             :class="{
                 'recorded-program-list__grid--loading': isLoading || isSearching,
@@ -76,8 +77,12 @@
             <div class="recorded-program-list__grid-content">
                 <RecordedProgram v-for="program in displayPrograms" :key="program.id" :program="program"
                     :forMylist="forMylist" :forWatchedHistory="forWatchedHistory" :forSeries="forSeries" :seriesId="seriesId"
-                    :cardView="view_mode === 'card'"
-                    @deleted="handleProgramDeleted" @removedFromSeries="handleProgramRemovedFromSeries" />
+                    :cardView="view_mode === 'card'" :forOffline="forOffline"
+                    :offlineVideo="offlineVideos?.find(video => video.video_id === program.id) ?? null"
+                    :offlineDownloadJob="getOfflineDownloadJob(program.id)"
+                    @deleted="handleProgramDeleted" @removedFromSeries="handleProgramRemovedFromSeries"
+                    @cancelOfflineJob="jobID => $emit('cancelOfflineJob', jobID)"
+                    @dismissOfflineJob="jobID => $emit('dismissOfflineJob', jobID)" />
             </div>
         </div>
         <div class="recorded-program-list__pagination" v-if="!hidePagination && displayTotal > 0">
@@ -97,11 +102,13 @@
 import { ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
+import type { IOfflineDownloadJob, IOfflineVideo } from '@/services/OfflineVideos';
+
 // ビュー切り替えの設定キー (localStorage に保存して次回以降も維持する)
 const VIEW_MODE_STORAGE_KEY = 'recorded-program-list-view-mode';
 
 import RecordedProgram from '@/components/Videos/RecordedProgram.vue';
-import { IRecordedProgram, MylistSortOrder, SortOrder } from '@/services/Videos';
+import { type IRecordedProgram, MylistSortOrder, SortOrder } from '@/services/Videos';
 import Utils from '@/utils';
 
 const router = useRouter();
@@ -129,6 +136,9 @@ const props = withDefaults(defineProps<{
     forWatchedHistory?: boolean;
     forSeries?: boolean;
     seriesId?: number;
+    forOffline?: boolean;
+    offlineVideos?: IOfflineVideo[];
+    offlineJobs?: IOfflineDownloadJob[];
 }>(), {
     page: 1,
     sortOrder: 'desc',
@@ -148,6 +158,9 @@ const props = withDefaults(defineProps<{
     forWatchedHistory: false,
     forSeries: false,
     seriesId: 0,
+    forOffline: false,
+    offlineVideos: undefined,
+    offlineJobs: undefined,
 });
 
 // Emits
@@ -156,6 +169,8 @@ const emit = defineEmits<{
     (e: 'update:sortOrder', order: SortOrder | MylistSortOrder): void;
     (e: 'more'): void;
     (e: 'removedFromSeries', id: number): void;
+    (e: 'cancelOfflineJob', jobID: string): void;
+    (e: 'dismissOfflineJob', jobID: string): void;
 }>();
 
 // 現在のページ番号
@@ -210,6 +225,13 @@ const handleProgramRemovedFromSeries = (id: number) => {
     displayTotal.value--;
     // 親コンポーネントにイベントを伝播
     emit('removedFromSeries', id);
+};
+
+/** 一覧に表示する保存ジョブを取得する */
+const getOfflineDownloadJob = (videoID: number): IOfflineDownloadJob | null => {
+    return props.offlineJobs?.find(job =>
+        job.video_id === videoID && ['Waiting', 'Downloading', 'Finalizing', 'Failed'].includes(job.state),
+    ) ?? null;
 };
 
 </script>

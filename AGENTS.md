@@ -38,6 +38,7 @@
 - `yarn dev` で起動するクライアントは、開発モード時のみ同じドメインの `:7000` のサーバー API を直接叩くようハードコードされています ([client/src/utils/Utils.ts](client/src/utils/Utils.ts) の `Utils.api_base_url` を参照)。Vite の proxy 設定は不要です
 - Chrome DevTools MCP からの検証時は `https://my.local.konomi.tv:7001` にアクセスしてください
 - クライアント開発サーバー経由で API リクエストが想定通りに動かない場合でも、**サーバーを立て直そうとしないでください**。まず `Utils.api_base_url` の DEV 分岐の挙動を読み直し、port 7000 で動いているサーバー側の状態を `ps -ef | grep KonomiTV` などで確認してください
+- 番組タイトルや番組概要を表示するときは必ず `ProgramUtils.decorateProgramInfo(program, 'field_name')` を使用してください
 
 ### Docker 版ステージング (port 7100、別物)
 
@@ -195,9 +196,33 @@ Windows では Windows サービス、Linux では pm2 サービスとして動�
 - `KonomiTV.py`: KonomiTV サーバーのエントリーポイント
 - `KonomiTV-Service.py`: Windows サービス管理スクリプト & Windows サービスのエントリーポイント
 
+## アーキテクチャ上の設計判断と既知の制約
+
+### ライブストリーミング (LiveStream / LiveEncodingTask) の協調動作
+
+- `LiveStream.connect()` と `LiveEncodingTask.run()` は相互依存の関係にある。チャンネル切り替え時は `connect()` が旧タスクを `cancel()` し、`CancelledError` が `Controller()` 内で捕捉されてクリーンアップに到達する
+- `EDCBTuner._isOwner()` チェックは二重操作を防ぐガードレールで、`handoff()` で所有権を移譲した後は旧ストリームからの `close()` / `disconnect()` はこのチェックで弾かれる
+- Python 3.11 では `CancelledError` を捕捉するとキャンセルカウンターがデクリメントされ、以降の `await` は正常に動作する。`asyncio.wait()` はタスク状態を変更しないが、`asyncio.wait_for()` はタイムアウト時にタスクを再度 cancel するので挙動が異なる点に注意する
+- より詳細な処理の流れは `server/app/streams/LiveEncodingTask.py` 内のコメントを参照すること
+
+### 録画再生のシーク (VideoStream / VideoEncodingTask)
+
+- 録画再生のシークは `server/app/streams/VideoStream.py` と `server/app/streams/VideoEncodingTask.py` が担当する。関連する実行時ログはライブ視聴と共通の `server/logs/KonomiTV-Server.log` に出力され、エンコーダー専用ログは存在しない
+- `VideoStream.resolveSegmentSourcePosition()` は `segment_map` キャッシュ・TS シーク・MP4 キーフレームテーブルのどの経路でソース位置を解決したかと所要時間を必ずログに出す。この経路の切り分けが録画再生のシーク不具合調査の起点になるため、ログ出力を削らないこと
+- `VideoEncodingTask` は入力側 TS のキーフレームを `TSKeyFrameCollector` (`server/app/utils/TSKeyFrameSeeker.py`) で収集する。エンコーダー出力側のキーフレームはこのキャッシュにおける有効な入力開始位置にはならない
+- `segment_map` キャッシュは録画 ID ごとにバッチ化・直列化されており、ロックは `WeakValueDictionary[int, asyncio.Lock]` で保持する。これにより、再生中でない録画のロックオブジェクトは自然に解放される
+- TS キーフレームキャッシュの経路と `TSKeyFrameSeeker.seek()` は同じ DTS 座標系 (`source_base_dts + playlist_start_seconds`) を使うため、両者は直接比較できる
+
+### 録画フォルダスキャン (RecordedScanTask) の設計判断
+
+- `RecordedScanTask.run()` は起動時の全件スキャン (`runBatchScan()`) と新規ファイルの監視 (`watchRecordedFolders()`) を `asyncio.gather()` で同時に実行しており、起動時スキャンが完了する前から新規録画の監視は動いている
+- `runBatchScan()` は `folder.rglob('*')` で見つかった順にファイルを処理する。`processRecordedFile()` は `file_created_at` / `file_modified_at` / `file_size` が DB の既存レコードと一致すれば重い解析をスキップするため、再スキャンでも変化のないファイルは軽く処理される
+- 過去に「起動時スキャンで全ファイルを先に収集し `st_ctime` でソートしてから新しい録画を優先処理する」という改善提案があったが、この方式は却下した。全件収集してからソートする実装は、最初の1件を処理し終えるまでに環境依存の固定 IO コストを必ず払うことになり、HDD・NAS・SMB など幅広いストレージ構成でこのコストが無視できない大きさになる。現状の「見つかった順に処理しつつ監視も並行させる」設計の方が、新規録画の反映を遅らせるリスクがなく安全
+
 ## コーディング規約
 
 ### 全般
+- サービス名はコード・型・コメント・UI・文書のすべてで一貫して `Twitter` と表記する。`X` は `X Premium` などの正式な商品名、`x.com` などのホスト名、HTTP ヘッダー名のように原表記が技術的に必要な場合だけ使用する
 - コードをざっくり斜め読みした際の可読性を高めるため、日本語のコメントを多めに記述する
 - コードを変更する際、既存のコメントは、変更によりコメント内容がコードの記述と合わなくなった場合を除き、コメント量に関わらずそのまま保持する
 - ログメッセージに関しては文字化けを避けるため、必ず英語で記述する
@@ -233,6 +258,7 @@ Windows では Windows サービス、Linux では pm2 サービスとして動�
 ### Vue / TypeScript コード
 
 - **コードの編集後には、必ず `yarn lint; yarn typecheck` コマンドで、ESLint によるコードリンターと TypeScript による型チェッカーを実行すること**
+- **`window.confirm()` / `window.alert()` などのブラウザ標準ダイアログは絶対に使用しないこと。Vuetify で既存 UI と一貫したダイアログを実装する。標準ダイアログで済ませるのは妥協・甘え・ボケナス実装であり、KonomiTV の UI として許容しない**
 - 文字列にはシングルクォートを用いる
 - 新規で実装する箇所に関しては Vue 3 Composition API パターンに従う
   - Vue.js 2 から移行した関係で Options API で書かれているコンポーネントがあるが、それらは Options API のまま維持する
@@ -241,6 +267,10 @@ Windows では Windows サービス、Linux では pm2 サービスとして動�
 - TypeScript による型安全性を確保する
 - コンポーネント属性は可能な限り1行に記述 (約100文字まで)
 - 必ず day.js を utils/index.ts からインポートして使うこと！！！new Date() を絶対に使うな！！！
+- クライアント側で新たに永続化したい値が出てきた場合、`localStorage.setItem` / `getItem` を直接呼ばず、必ず `client/src/stores/SettingsStore.ts` の `ILocalClientSettings` / `ILocalClientSettingsDefault` に集約する。SettingsStore は LocalStorage への永続化と、KonomiTV アカウントによるサーバー側設定との双方向同期を一手に引き受けており、独自キーを直書きするとこの同期の枠組みから外れてしまう
+  - DB の連番 ID に依存する値 (`selected_twitter_panel_account` など) は環境が変わると意味を失うため、`ENVIRONMENT_SPECIFIC_SETTINGS_KEYS` に加えて同期無効にする
+  - 他者の実装をレビューする際は `localStorage` / `sessionStorage` を grep し、この集約を迂回した直接アクセスが紛れ込んでいないか必ず確認する
+  - なお、アクセストークン (`Utils.ts`)・データ放送 NVRAM エミュレーション (`DataBroadcasting.vue`)・DPlayer 側のキー (`Jikkyo.vue` の `dplayer-danmaku-*`) は、ユーザー設定ではなく認証状態・ハードウェアエミュレーション・サードパーティ側の永続化キーであるため、この集約ルールの対象外として既存のまま残っている
 
 ### CSS / SCSS スタイリング
 - このプロジェクトで使用している色 (CSS 変数) などは `client/src/App.vue` や `client/src/plugins/vuetify.ts` に定義しているので、それを参照すること
