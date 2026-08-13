@@ -323,6 +323,35 @@ class AccountLink(PydanticModel):
 class Users(RootModel[list[User]]):
     pass
 
+# ***** 視聴履歴 *****
+
+class WatchedHistory(BaseModel):
+    items: list[WatchedHistoryItem]
+
+class WatchedHistoryItem(BaseModel):
+    video_id: int
+    last_playback_position: Annotated[float, Field(ge=0)]
+    created_at: Annotated[float, Field(gt=0)]
+    updated_at: Annotated[float, Field(gt=0)]
+
+# ***** 端末ペアリング (OAuth 2.0 Device Authorization Grant 相当) *****
+
+class DeviceAuthCreateRequest(BaseModel):
+    device_name: Annotated[str, Field(min_length=1, max_length=100)]
+
+class DeviceAuthRequest(BaseModel):
+    device_code: str
+    user_code: str
+    verification_url: str
+    expires_in: int
+    interval: int
+
+class DeviceAuthApprovalRequest(BaseModel):
+    user_code: Annotated[str, Field(min_length=8, max_length=8)]
+
+class DeviceAuthTokenRequest(BaseModel):
+    device_code: Annotated[str, Field(min_length=32, max_length=100)]
+
 # ***** Twitter / Bluesky 連携 *****
 
 class TwitterAccount(PydanticModel):

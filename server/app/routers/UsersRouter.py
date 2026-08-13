@@ -1,6 +1,8 @@
 
 import asyncio
+import hashlib
 import pathlib
+import secrets
 import uuid
 from datetime import datetime, timedelta
 from typing import Annotated, BinaryIO
@@ -33,6 +35,7 @@ from app.constants import (
 )
 from app.models.AccountLink import AccountLink
 from app.models.BlueskyAccount import BlueskyAccount
+from app.models.DeviceAuth import DeviceAuth
 from app.models.TwitterAccount import TwitterAccount
 from app.models.User import User
 
@@ -77,6 +80,21 @@ def GenerateAccessToken(user_id: int) -> str:
         key = JWT_SECRET_KEY,
         algorithm = 'HS256',
     )
+
+
+def HashDeviceCode(device_code: str) -> str:
+    """
+    端末だけが保持するデバイスコードを、DB 保存用の SHA-256 ハッシュへ変換する。
+    デバイスコードは実質的にアクセストークンと同等の価値を持つため、平文では DB に保存しない。
+
+    Args:
+        device_code (str): ペアリング要求時に端末へ発行した十分に長いデバイスコード。
+
+    Returns:
+        str: デバイスコードの SHA-256 ハッシュ。
+    """
+
+    return hashlib.sha256(device_code.encode()).hexdigest()
 
 
 async def GetCurrentUser(token: Annotated[str, Depends(OAuth2PasswordBearer(tokenUrl='users/token'))]) -> User:
@@ -308,6 +326,136 @@ async def UserAccessTokenAPI(
         access_token = GenerateAccessToken(current_user.id),
         token_type = 'bearer',
     )
+
+
+@router.post(
+    '/device-auth',
+    summary = '端末ペアリング要求作成 API',
+    response_description = '端末コード・ユーザーコードと確認 URL 。',
+    response_model = schemas.DeviceAuthRequest,
+    status_code = status.HTTP_201_CREATED,
+)
+async def DeviceAuthCreateAPI(
+    request: Annotated[schemas.DeviceAuthCreateRequest, Body(description='連携元端末の表示名。')],
+):
+    """
+    テレビ向けクライアントなど、文字入力が困難な端末向けの一時的なペアリング要求を作成する。<br>
+    端末側はここで受け取ったデバイスコードを保持し、ユーザーはブラウザ上でユーザーコードを承認する。
+
+    Args:
+        request (schemas.DeviceAuthCreateRequest): 連携元端末の表示名。
+
+    Returns:
+        schemas.DeviceAuthRequest: 端末コード、ユーザーコード、確認 URL と有効期間。
+    """
+
+    # 有効期限が切れたペアリング要求をこのタイミングで掃除しておく
+    now = datetime.now(JST)
+    await DeviceAuth.filter(expires_at__lte=now).delete()
+
+    # ユーザーコードの衝突は DB の一意制約を最終保証として、衝突時だけ新しいコードを再生成する
+    ## ユーザーコードは読み上げ・入力される前提のため、誤読しやすい I/O/0/1 を除いた文字種から生成する
+    while True:
+        device_code = secrets.token_urlsafe(32)
+        user_code = ''.join(secrets.choice('ABCDEFGHJKLMNPQRSTUVWXYZ23456789') for _ in range(8))
+        try:
+            await DeviceAuth.create(
+                device_code_hash = HashDeviceCode(device_code),
+                user_code = user_code,
+                device_name = request.device_name,
+                expires_at = now + timedelta(minutes=10),
+            )
+            break
+        except IntegrityError:
+            continue
+
+    return schemas.DeviceAuthRequest(
+        device_code = device_code,
+        user_code = user_code,
+        verification_url = f'/pair/?code={user_code}',
+        expires_in = 600,
+        interval = 3,
+    )
+
+
+@router.post(
+    '/device-auth/approve',
+    summary = '端末ペアリング承認 API',
+    status_code = status.HTTP_204_NO_CONTENT,
+)
+async def DeviceAuthApproveAPI(
+    request: Annotated[schemas.DeviceAuthApprovalRequest, Body(description='端末側に表示されているユーザーコード。')],
+    current_user: Annotated[User, Depends(GetCurrentUser)],
+):
+    """
+    ログイン中のユーザーが、端末側に表示されたユーザーコードを承認する。<br>
+    JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されていないとアクセスできない。
+
+    Args:
+        request (schemas.DeviceAuthApprovalRequest): 端末側に表示されているユーザーコード。
+        current_user (User): JWT から解決したログイン中のユーザー。
+
+    Returns:
+        None: 承認に成功した場合はレスポンス本文を返さない。
+    """
+
+    pairing = await DeviceAuth.filter(user_code=request.user_code.upper(), expires_at__gt=datetime.now(JST)).get_or_none()
+    if pairing is None:
+        logging.error(f'[UsersRouter][DeviceAuthApproveAPI] Device authorization request was not found. [user_code: {request.user_code}]')
+        raise HTTPException(
+            status_code = status.HTTP_404_NOT_FOUND,
+            detail = 'Device authorization request was not found',
+        )
+
+    # 同時承認時も最初のユーザーだけを受け付け、後続ユーザーによる上書きを防ぐ
+    ## user_id が未設定のレコードだけを条件に更新することで、DB 側で不可分に承認者を確定させる
+    updated_count = await DeviceAuth.filter(id=pairing.id, user_id=None).update(user_id=current_user.id)
+    if updated_count == 0:
+        logging.error(f'[UsersRouter][DeviceAuthApproveAPI] Device authorization request was already approved. [user_code: {request.user_code}]')
+        raise HTTPException(
+            status_code = status.HTTP_409_CONFLICT,
+            detail = 'Device authorization request was already approved',
+        )
+
+
+@router.post(
+    '/device-auth/token',
+    summary = '端末ペアリングトークン交換 API',
+    response_description = '承認済みペアリング要求に対応するアクセストークン。',
+    response_model = schemas.UserAccessToken,
+)
+async def DeviceAuthTokenAPI(
+    request: Annotated[schemas.DeviceAuthTokenRequest, Body(description='端末だけが保持するデバイスコード。')],
+):
+    """
+    承認済みのペアリング要求を、端末が利用するアクセストークンへ交換する。<br>
+    端末側はユーザーによる承認が終わるまで、この API を一定間隔でポーリングする。
+
+    Args:
+        request (schemas.DeviceAuthTokenRequest): 端末だけが保持するデバイスコード。
+
+    Returns:
+        schemas.UserAccessToken | Response: 承認後はアクセストークン、承認待ちの間は HTTP 202 。
+    """
+
+    pairing = await DeviceAuth.filter(
+        device_code_hash = HashDeviceCode(request.device_code),
+        expires_at__gt = datetime.now(JST),
+    ).get_or_none()
+    if pairing is None:
+        raise HTTPException(
+            status_code = status.HTTP_404_NOT_FOUND,
+            detail = 'Device authorization request was not found',
+        )
+
+    # まだユーザーによる承認が行われていないため、端末側にポーリング継続を促す
+    if pairing.user_id is None:
+        return Response(status_code=status.HTTP_202_ACCEPTED)
+
+    # 一度トークンへ交換したペアリング要求は使い回せないよう削除する
+    token = GenerateAccessToken(pairing.user_id)
+    await pairing.delete()
+    return schemas.UserAccessToken(access_token=token, token_type='bearer')
 
 
 @router.get(
