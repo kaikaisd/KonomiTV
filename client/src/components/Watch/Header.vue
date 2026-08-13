@@ -55,6 +55,9 @@ export default defineComponent({
 
             // 録画再生時の再生位置 (秒)
             playback_position: 0,
+
+            // 時刻更新用の setTimeout の ID (beforeUnmount() でタイマーを破棄するために保持する)
+            time_update_timer_id: 0,
         };
     },
     computed: {
@@ -100,9 +103,11 @@ export default defineComponent({
                 return ms > 800 ? 500 : 1000 - ms;
             }
         },
-        uptimeTime() {
-            setTimeout(() => {
-                this.uptimeTime();
+        // 次回の更新までの待ち時間を updateTimeCore() から受け取り、その分だけ待って自身を再スケジュールする
+        // setInterval ではなく毎回 setTimeout を張り直すことで、秒の境界へ追従しながら更新できる
+        scheduleTimeUpdate() {
+            this.time_update_timer_id = window.setTimeout(() => {
+                this.scheduleTimeUpdate();
             }, this.updateTimeCore());
         },
         // 視聴画面をミニプレイヤーに縮小する
@@ -132,11 +137,9 @@ export default defineComponent({
         },
     },
     created() {
-        // 初期表示の時刻を設定
+        // 初期表示の時刻を設定した上で、次の秒境界に合わせた更新スケジュールを開始する
         this.time = this.formatTime(dayjs());
-        setTimeout(() => {
-            this.uptimeTime();
-        }, 1000);
+        this.scheduleTimeUpdate();
 
         // 録画再生時: 再生位置が変更されたときに playback_position を更新
         this.playerStore.event_emitter.on('PlaybackPositionChanged', (event) => {
@@ -148,7 +151,8 @@ export default defineComponent({
         });
     },
     beforeUnmount() {
-        this.uptimeTime = ()=>{ };
+        // 予約済みのタイマーを破棄し、アンマウント後に時刻更新が走らないようにする
+        window.clearTimeout(this.time_update_timer_id);
     },
 });
 
