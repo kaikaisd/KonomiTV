@@ -928,10 +928,13 @@ async def VideoAvailableChannelsAPI(
 async def VideoReanalyzeAPI(
     recorded_program: Annotated[RecordedProgram, Depends(GetRecordedProgram)],
     selected_service_id: Annotated[int | None, Query(description='解析対象として使用する service_id 。複数チャンネルを含む TS ファイルでのみ指定する。')] = None,
+    files_only: Annotated[bool, Query(description='ファイル情報のみを再解析し、CM 区間検出・サムネイル生成・キーフレーム解析をスキップするかどうか。')] = False,
 ):
     """
     指定された録画番組のメタデータ（動画情報・番組情報・サムネイル画像・CM 区間情報など）をすべて再解析・再生成する。<br>
-    selected_service_id を指定すると、複数チャンネルを含む TS ファイルのうち指定したチャンネルとして解析し直す。
+    selected_service_id を指定すると、複数チャンネルを含む TS ファイルのうち指定したチャンネルとして解析し直す。<br>
+    files_only を指定すると、トランスコード済みファイルへの差し替えを想定してファイル情報のみを更新し、
+    時間のかかる CM 区間検出・サムネイル生成・キーフレーム解析を省略する。
     """
 
     try:
@@ -947,6 +950,8 @@ async def VideoReanalyzeAPI(
             wait_background_analysis = True,
             # ユーザーが明示的にチャンネルを選択している場合、そのチャンネルとして解析する
             selected_service_id = selected_service_id,
+            # ファイル情報のみを再解析するかどうか
+            files_only = files_only,
         )
 
     except Exception as ex:
