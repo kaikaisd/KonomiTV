@@ -361,13 +361,14 @@ async def VideosAPI(
     ids: Annotated[list[int] | None, Query(description='録画番組 ID のリスト。指定時は指定された ID の録画番組のみを返す。')] = None,
     channel_id: Annotated[str | None, Query(description='チャンネル ID 。指定時は同一チャンネルの録画番組に絞り込む。')] = None,
     genre: Annotated[str | None, Query(description='ジャンル名。指定時は指定されたジャンルを含む録画番組に絞り込む。')] = None,
+    video_status: Annotated[Literal['Recording', 'Recorded', 'AnalysisFailed'] | None, Query(alias='status', description='録画ファイルの状態。指定時はその状態の録画番組のみを返す (追っかけ再生一覧では Recording を指定する)。')] = None,
 ):
     """
     すべての録画番組を一度に 30 件ずつ取得する。<br>
     order には "desc" か "asc" か "ids" を指定する。"ids" を指定すると、ids パラメータで指定された順序を維持する。<br>
     page (ページ番号) には 1 以上の整数を指定する。<br>
     ids には録画番組 ID のリストを指定できる。指定時は指定された ID の録画番組のみを返す。<br>
-    channel_id / genre を指定すると、さらにチャンネル・ジャンルで絞り込める。
+    channel_id / genre / status を指定すると、さらにチャンネル・ジャンル・録画ファイルの状態で絞り込める。
     """
 
     # 生 SQL クエリを構築
@@ -461,7 +462,14 @@ async def VideosAPI(
         # genres は JSON カラムのため、ジャンル名を JSON 文字列として含むかどうかで絞り込む
         filter_clauses.append('AND rp.genres LIKE ?')
         filter_params.append(f'%"{genre}"%')
+    if video_status is not None:
+        # 録画ファイルの状態は recorded_videos 側が持つため、件数取得側でも同じ JOIN が必要になる
+        filter_clauses.append('AND rv.status = ?')
+        filter_params.append(video_status)
     filter_where_clause = '\n        '.join(filter_clauses)
+
+    # 件数取得クエリは本来 recorded_programs だけで完結するが、rv.status で絞り込む場合のみ JOIN が必要になる
+    TOTAL_QUERY_JOIN = 'JOIN recorded_videos rv ON rp.id = rv.recorded_program_id' if video_status is not None else ''
 
     # ids が指定されている場合は、指定された ID の録画番組のみを返す
     target_ids: list[int] | None = None
@@ -491,7 +499,8 @@ async def VideosAPI(
             params = [*target_ids, *filter_params, str(PAGE_SIZE), '0']  # OFFSET は 0 固定
 
             # 総数を取得
-            total_query = 'SELECT COUNT(*) as count FROM recorded_programs rp WHERE rp.id IN ({}) {}'.format(
+            total_query = 'SELECT COUNT(*) as count FROM recorded_programs rp {} WHERE rp.id IN ({}) {}'.format(
+                TOTAL_QUERY_JOIN,
                 ','.join(['?' for _ in ids]),
                 filter_where_clause,
             )
@@ -506,7 +515,8 @@ async def VideosAPI(
             params = [*ids, *filter_params, str(PAGE_SIZE), str((page - 1) * PAGE_SIZE)]
 
             # 総数を取得
-            total_query = 'SELECT COUNT(*) as count FROM recorded_programs rp WHERE rp.id IN ({}) {}'.format(
+            total_query = 'SELECT COUNT(*) as count FROM recorded_programs rp {} WHERE rp.id IN ({}) {}'.format(
+                TOTAL_QUERY_JOIN,
                 ','.join(['?' for _ in ids]),
                 filter_where_clause,
             )
@@ -522,7 +532,7 @@ async def VideosAPI(
 
         # 総数を取得
         ## WHERE 句が空でも構文が壊れないよう、常に真となる条件を先頭に置く
-        total_query = f'SELECT COUNT(*) as count FROM recorded_programs rp WHERE 1=1 {filter_where_clause}'
+        total_query = f'SELECT COUNT(*) as count FROM recorded_programs rp {TOTAL_QUERY_JOIN} WHERE 1=1 {filter_where_clause}'
         total_params = [*filter_params]
 
     try:
