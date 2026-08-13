@@ -414,7 +414,7 @@ import EncodingTasks, { IEncodingTask } from '@/services/EncodingTasks';
 import OfflineVideos, { type IOfflineDownloadJob, type IOfflineVideo } from '@/services/OfflineVideos';
 import SeriesService from '@/services/Series';
 import Settings, { IEncodingProfile } from '@/services/Settings';
-import Videos, { type IRecordedProgram } from '@/services/Videos';
+import Videos, { type IRecordedProgram, type IRecordedVideoAvailableChannel } from '@/services/Videos';
 import useSettingsStore from '@/stores/SettingsStore';
 import useUserStore from '@/stores/UserStore';
 import Utils, { PlayerUtils, ProgramUtils } from '@/utils';
