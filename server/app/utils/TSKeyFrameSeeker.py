@@ -352,6 +352,113 @@ class TSKeyFrameSeeker:
 
 
     @staticmethod
+    def findAvailableDuration(
+        path: Path,
+        stream_info: TSStreamInfo,
+        source_base_dts: int,
+        *,
+        previous_duration_seconds: float = 0.0,
+    ) -> float | None:
+        """
+        録画中 TS の末尾付近にある最新 PCR から、現時点で読める再生時間を推定する
+        追っかけ再生時に、まだ書き込み中のファイルのどこまでを安全に再生できるかを判断するために使う
+
+        Args:
+            path (Path): TS コンテナの録画ファイルパス
+            stream_info (TSStreamInfo): PCR PID を含むストリーム情報
+            source_base_dts (int): 録画先頭キーフレームの DTS (90kHz)
+            previous_duration_seconds (float): 前回推定した再生時間 (33bit ラップ補正の基準に使う)
+
+        Returns:
+            float | None: 現時点で読める再生時間 (秒)。PCR が見つからない場合は None
+        """
+
+        file_size = path.stat().st_size
+        if file_size <= 0:
+            return None
+
+        # 末尾は録画プロセスが書き込み中の可能性があるため、数 MB 手前から順に読み、最後に見つかった PCR を採用する
+        ## PCR PID だけを見るので、番組情報 EIT の解析結果には依存しない
+        start_offset = max(0, file_size - TSKeyFrameSeeker.PCR_SEARCH_WINDOW_BYTES * 4)
+        start_offset = max(0, (start_offset // stream_info.packet_size) * stream_info.packet_size)
+        max_scan_bytes = file_size - start_offset
+        last_pcr: int | None = None
+
+        # ファイル先頭からの単純なパケットサイズ境界と、実際のパケット境界がずれていることがあるため、同期位置を探し直す
+        resync_offset = TSKeyFrameSeeker.__findResyncOffset(
+            path,
+            stream_info.packet_size,
+            start_offset,
+            min(max_scan_bytes, TSKeyFrameSeeker.PCR_SEARCH_WINDOW_BYTES),
+        )
+        if resync_offset is None:
+            return None
+
+        scanned_bytes = 0
+        with path.open('rb') as file:
+            file.seek(resync_offset)
+            while scanned_bytes < max_scan_bytes:
+                packet = TSKeyFrameSeeker.normalizePacket(file.read(stream_info.packet_size), stream_info.packet_size)
+                scanned_bytes += stream_info.packet_size
+                # 書き込み途中で同期が壊れている場合は、そこまでを読み取り可能範囲とみなして打ち切る
+                if packet is None:
+                    break
+                if ts.pid(packet) == stream_info.pcr_pid and ts.has_pcr(packet) is True:
+                    last_pcr = cast(int, ts.pcr(packet))
+
+        if last_pcr is None:
+            return None
+
+        # 長時間録画で PCR/DTS が 33bit ラップした場合に備え、前回推定した末尾時刻へ近い値として展開する
+        ## 録画中のファイルは単調に伸びるため、source_base_dts 固定ではなく直近推定値を基準にした方が自然に追跡できる
+        unwrap_target_dts = source_base_dts + round(max(previous_duration_seconds, 0.0) * ts.HZ)
+        available_end_dts = TSKeyFrameSeeker.unwrapNear(last_pcr, unwrap_target_dts)
+        available_duration_seconds = (available_end_dts - source_base_dts) / ts.HZ
+        return max(available_duration_seconds, 0.0)
+
+
+    @staticmethod
+    def __findResyncOffset(
+        path: Path,
+        packet_size: int,
+        start_offset: int,
+        max_scan_bytes: int,
+    ) -> int | None:
+        """
+        指定位置以降で TS 同期バイトが連続するファイル位置を探す
+
+        Args:
+            path (Path): TS コンテナの録画ファイルパス
+            packet_size (int): ファイル上の TS パケットサイズ
+            start_offset (int): 探索を開始する概算ファイル位置
+            max_scan_bytes (int): 同期位置を探索する最大バイト数
+
+        Returns:
+            int | None: TS パケット境界とみなせるファイル位置、見つからない場合は None
+        """
+
+        file_size = path.stat().st_size
+        if file_size <= 0:
+            return None
+        start_offset = max(0, min(start_offset, max(file_size - 1, 0)))
+        max_scan_bytes = max(max_scan_bytes, packet_size * 5)
+
+        with path.open('rb') as file:
+            file.seek(start_offset)
+            data = file.read(max_scan_bytes)
+
+        max_offset = len(data) - packet_size * 4
+        if max_offset < 0:
+            return None
+        for offset in range(max_offset + 1):
+            # 任意 offset から切り出した TS では、ファイル先頭からの 188 バイト境界と実パケット境界がずれていることがある
+            ## 5 パケット連続で同期バイトが一致する位置だけを採用し、途中の payload 0x47 を誤検出しないようにする
+            if all(data[offset + packet_size * index] == ts.SYNC_BYTE[0] for index in range(5)) is True:
+                return start_offset + offset
+        return None
+
+
+    @staticmethod
     def __detectPacketSize(path: Path) -> int:
         """
         TS パケットサイズを 188 バイトまたは 192 バイトから推定する
