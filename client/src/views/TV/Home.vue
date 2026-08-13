@@ -22,6 +22,7 @@
                     :observer="true" :observe-parents="true"
                     @swiper="swiper_instance = $event"
                     @slide-change="active_tab_index = $event.activeIndex"
+                    @slide-change-transition-end="onSlideChangeTransitionEnd"
                     v-show="Array.from(channelsStore.channels_list_with_pinned).length > 0">
                     <SwiperSlide v-for="[channels_type, channels] in Array.from(channelsStore.channels_list_with_pinned)" :key="channels_type">
                         <div class="channels" :class="`channels--tab-${channels_type} channels--length-${channels.length}`">
@@ -161,6 +162,13 @@ export default defineComponent({
             // スクロールイベントを解除するための AbortController
             scroll_abort_controller: new AbortController(),
 
+            // 各タブのスクロール位置を保存するオブジェクト (キー: タブのインデックス / 値: window.scrollY)
+            tab_scroll_positions: {} as Record<number, number>,
+
+            // Swiper のスライド切り替えアニメーション中かどうか
+            // アニメーション中のスクロール位置は復元先の値ではないため、保存対象から除外する
+            is_swiper_transitioning: false,
+
             // ローディング中かどうか
             is_loading: true,
 
@@ -174,7 +182,15 @@ export default defineComponent({
         ...mapStores(useChannelsStore, useSettingsStore),
     },
     watch: {
-        active_tab_index() {
+        active_tab_index(_newIndex: number, oldIndex: number) {
+            // Swiper のスライド切り替えアニメーションが始まったことを記録する
+            this.is_swiper_transitioning = true;
+
+            // 切り替え前のタブのスクロール位置を保存する
+            if (oldIndex !== undefined) {
+                this.tab_scroll_positions[oldIndex] = window.scrollY;
+            }
+
             // content-visibility: auto の指定の関係でうまく計算されないことがある Swiper の autoHeight を強制的に再計算する
             this.swiper_instance?.updateAutoHeight();
             // 現在なアクティブなタブを Swiper 側に随時反映する
@@ -222,6 +238,11 @@ export default defineComponent({
         // 画面がスクロールされたときに Swiper の autoHeight を再計算する
         window.addEventListener('scroll', () => {
             this.swiper_instance?.updateAutoHeight();
+            // 現在のタブのスクロール位置を常に保存しておく
+            // ただし Swiper のアニメーション中は、復元先ではない途中のスクロール位置で上書きしてしまうため保存しない
+            if (this.is_swiper_transitioning === false) {
+                this.tab_scroll_positions[this.active_tab_index] = window.scrollY;
+            }
         }, { passive: true, signal: this.scroll_abort_controller.signal });
 
         // チャンネル情報の更新が終わったタイミングでローディング状態を解除する
@@ -242,6 +263,12 @@ export default defineComponent({
         this.scroll_abort_controller = new AbortController();
     },
     methods: {
+
+        // Swiper のスライド切り替えアニメーション完了後に、新しいタブのスクロール位置を復元する
+        onSlideChangeTransitionEnd() {
+            window.scrollTo(0, this.tab_scroll_positions[this.active_tab_index] ?? 0);
+            this.is_swiper_transitioning = false;
+        },
 
         // チャンネルをピン留めする
         addPinnedChannel(channel: ILiveChannel) {

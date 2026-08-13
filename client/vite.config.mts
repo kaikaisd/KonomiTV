@@ -42,7 +42,7 @@ export default defineConfig({
             scss: {
                 // 共通の mixin を読み込む
                 // ref: https://qiita.com/nanohanabuttobasu/items/f73ed978cc10d8bcaa59
-                additionalData: '@import "./src/styles/mixin.scss";',
+                additionalData: '@import "@/styles/mixin.scss";',
             },
         },
     },
@@ -77,7 +77,9 @@ export default defineConfig({
         // ref: https://vite-pwa-org.netlify.app/guide/
         VitePWA({
             // Service Worker の登録方法
-            strategies: 'generateSW',
+            strategies: 'injectManifest',
+            srcDir: 'src',
+            filename: 'sw.ts',
             registerType: 'prompt',  // PWA の更新前にユーザーに確認する
             injectRegister: 'auto',
             // PWA のキャッシュに含めるファイル
@@ -118,18 +120,10 @@ export default defineConfig({
                     }
                 ]
             },
-            // Workbox の設定
-            workbox: {
-                // 新しい SW がアクティブ化した瞬間に全クライアントを制御下に置く。
-                // これにより updateServiceWorker(true) → skipWaiting → reload の流れで
-                // 確実に新しい SW がページを制御し、古いキャッシュが引き続き使われる状況を防ぐ。
-                clientsClaim: true,
-                // 古いキャッシュを自動削除する
-                cleanupOutdatedCaches: true,
-                // /api/, /cdn-cgi/(cloudflare) 以下のリクエストでは index.html を返さない
-                // CF Access の認証エンドポイント (/cdn-cgi/access/*) は SW のキャッシュを
-                // バイパスさせ、常にネットワーク (Cloudflare エッジ) へ到達させる必要がある。
-                navigateFallbackDenylist: [/^\/api/, /^\/cdn-cgi/],
+            // 独自 Service Worker へ注入する事前キャッシュの設定
+            // upstream が strategies: 'injectManifest' へ移行したため、旧 generateSW 向けの workbox 設定はここへ集約している。
+            // navigateFallbackDenylist (/api, /cdn-cgi) と cleanupOutdatedCaches は src/sw.ts 側で同等の処理を行っている。
+            injectManifest: {
                 // キャッシュするファイルの最大サイズ
                 maximumFileSizeToCacheInBytes: 1024 * 1024 * 15,  // 15MB
                 // manifest.webmanifest を precache の対象から除外する
@@ -140,7 +134,7 @@ export default defineConfig({
                 // precache から外すことでブラウザが manifest を直接取得するようになり、
                 // ループを防止できる (manifest の内容は公開情報のため除外しても問題ない)。
                 globIgnores: ['**/manifest.webmanifest'],
-            }
+            },
         }),
     ],
     // Web Worker 上のプラグインの設定

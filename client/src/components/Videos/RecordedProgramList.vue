@@ -55,6 +55,7 @@
                 </v-btn>
             </div>
         </div>
+        <slot name="after-header"></slot>
         <div class="recorded-program-list__grid"
             :class="{
                 'recorded-program-list__grid--loading': isLoading || isSearching,
@@ -68,16 +69,32 @@
                 }">
                 <div class="recorded-program-list__empty-content">
                     <Icon class="recorded-program-list__empty-icon" :icon="emptyIcon" width="54px" height="54px" />
-                    <h2 v-html="emptyMessage"></h2>
+                    <!-- 空メッセージは外部文字列をテキストとして表示し、改行は固定の <br> 要素として構造的に描画する -->
+                    <!-- 検索 query などの外部文字列が HTML として解釈される反射型 XSS を防ぐため、v-html は使わない -->
+                    <h2>
+                        <template v-for="(line, index) in emptyMessageLines" :key="index">
+                            <br v-if="index > 0" class="d-sm-none">
+                            {{ line }}
+                        </template>
+                    </h2>
                     <div class="recorded-program-list__empty-submessage"
-                        v-if="emptySubMessage" v-html="emptySubMessage"></div>
+                        v-if="emptySubMessage">
+                        <template v-for="(line, index) in emptySubMessageLines" :key="index">
+                            <br v-if="index > 0" class="d-sm-none">
+                            {{ line }}
+                        </template>
+                    </div>
                 </div>
             </div>
             <div class="recorded-program-list__grid-content">
                 <RecordedProgram v-for="program in displayPrograms" :key="program.id" :program="program"
                     :forMylist="forMylist" :forWatchedHistory="forWatchedHistory" :forSeries="forSeries" :seriesId="seriesId"
-                    :cardView="view_mode === 'card'"
-                    @deleted="handleProgramDeleted" @removedFromSeries="handleProgramRemovedFromSeries" />
+                    :cardView="view_mode === 'card'" :forOffline="forOffline"
+                    :offlineVideo="offlineVideos?.find(video => video.video_id === program.id) ?? null"
+                    :offlineDownloadJob="getOfflineDownloadJob(program.id)"
+                    @deleted="handleProgramDeleted" @removedFromSeries="handleProgramRemovedFromSeries"
+                    @cancelOfflineJob="jobID => $emit('cancelOfflineJob', jobID)"
+                    @dismissOfflineJob="jobID => $emit('dismissOfflineJob', jobID)" />
             </div>
         </div>
         <div class="recorded-program-list__pagination" v-if="!hidePagination && displayTotal > 0">
@@ -94,14 +111,16 @@
 </template>
 <script lang="ts" setup>
 
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+
+import type { IOfflineDownloadJob, IOfflineVideo } from '@/services/OfflineVideos';
 
 // ビュー切り替えの設定キー (localStorage に保存して次回以降も維持する)
 const VIEW_MODE_STORAGE_KEY = 'recorded-program-list-view-mode';
 
 import RecordedProgram from '@/components/Videos/RecordedProgram.vue';
-import { IRecordedProgram, MylistSortOrder, SortOrder } from '@/services/Videos';
+import { type IRecordedProgram, MylistSortOrder, SortOrder } from '@/services/Videos';
 import Utils from '@/utils';
 
 const router = useRouter();
@@ -121,14 +140,19 @@ const props = withDefaults(defineProps<{
     showEmptyMessage?: boolean;
     hideViewToggle?: boolean;
     emptyIcon?: string;
-    emptyMessage?: string;
-    emptySubMessage?: string;
+    // 空メッセージは外部文字列をテキストとして表示するため HTML は受け取らない
+    // 改行を入れたい場合は配列で行を渡し、行間へ固定の <br> 要素を挿入する
+    emptyMessage?: string | string[];
+    emptySubMessage?: string | string[];
     isLoading?: boolean;
     isSearching?: boolean;
     forMylist?: boolean;
     forWatchedHistory?: boolean;
     forSeries?: boolean;
     seriesId?: number;
+    forOffline?: boolean;
+    offlineVideos?: IOfflineVideo[];
+    offlineJobs?: IOfflineDownloadJob[];
 }>(), {
     page: 1,
     sortOrder: 'desc',
@@ -141,13 +165,16 @@ const props = withDefaults(defineProps<{
     hideViewToggle: false,
     emptyIcon: 'fluent:search-20-regular',
     emptyMessage: '録画番組が見つかりませんでした。',
-    emptySubMessage: 'サーバー設定で録画フォルダのパスを<br class="d-sm-none">正しく設定できているか確認してください。',
+    emptySubMessage: () => ['サーバー設定で録画フォルダのパスを', '正しく設定できているか確認してください。'],
     isLoading: false,
     isSearching: false,
     forMylist: false,
     forWatchedHistory: false,
     forSeries: false,
     seriesId: 0,
+    forOffline: false,
+    offlineVideos: undefined,
+    offlineJobs: undefined,
 });
 
 // Emits
@@ -156,6 +183,8 @@ const emit = defineEmits<{
     (e: 'update:sortOrder', order: SortOrder | MylistSortOrder): void;
     (e: 'more'): void;
     (e: 'removedFromSeries', id: number): void;
+    (e: 'cancelOfflineJob', jobID: string): void;
+    (e: 'dismissOfflineJob', jobID: string): void;
 }>();
 
 // 現在のページ番号
@@ -173,6 +202,11 @@ watch(view_mode, (mode) => { localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode); 
 const displayPrograms = ref<IRecordedProgram[]>([...props.programs]);
 // 内部で管理する合計数
 const displayTotal = ref<number>(props.total);
+
+// 空メッセージの行配列 (文字列で渡された場合は 1 行として扱い、行間へ固定の <br> 要素を挿入する)
+// テキスト補間で表示するため、検索 query などの外部文字列が HTML として解釈されない
+const emptyMessageLines = computed<string[]>(() => Array.isArray(props.emptyMessage) ? props.emptyMessage : [props.emptyMessage]);
+const emptySubMessageLines = computed<string[]>(() => Array.isArray(props.emptySubMessage) ? props.emptySubMessage : [props.emptySubMessage]);
 
 // props の page が変更されたら current_page を更新
 watch(() => props.page, (newPage) => {
@@ -210,6 +244,13 @@ const handleProgramRemovedFromSeries = (id: number) => {
     displayTotal.value--;
     // 親コンポーネントにイベントを伝播
     emit('removedFromSeries', id);
+};
+
+/** 一覧に表示する保存ジョブを取得する */
+const getOfflineDownloadJob = (videoID: number): IOfflineDownloadJob | null => {
+    return props.offlineJobs?.find(job =>
+        job.video_id === videoID && ['Waiting', 'Downloading', 'Finalizing', 'Failed'].includes(job.state),
+    ) ?? null;
 };
 
 </script>

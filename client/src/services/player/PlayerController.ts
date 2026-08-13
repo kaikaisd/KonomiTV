@@ -7,6 +7,7 @@ import mpegts from 'mpegts.js';
 import { watch } from 'vue';
 
 import APIClient from '@/services/APIClient';
+import OfflineVideos from '@/services/OfflineVideos';
 import CustomBufferController from '@/services/player/CustomBufferController';
 import CaptureManager from '@/services/player/managers/CaptureManager';
 import DocumentPiPManager from '@/services/player/managers/DocumentPiPManager';
@@ -16,7 +17,7 @@ import LiveDataBroadcastingManager from '@/services/player/managers/LiveDataBroa
 import LiveEventManager from '@/services/player/managers/LiveEventManager';
 import MediaSessionManager from '@/services/player/managers/MediaSessionManager';
 import PlayerManager from '@/services/player/PlayerManager';
-import Videos from '@/services/Videos';
+import Videos, { type IJikkyoComments } from '@/services/Videos';
 import useChannelsStore from '@/stores/ChannelsStore';
 import usePlayerStore from '@/stores/PlayerStore';
 import useSettingsStore, { LiveStreamingQuality, LIVE_STREAMING_QUALITIES, VideoStreamingQuality, VIDEO_STREAMING_QUALITIES } from '@/stores/SettingsStore';
@@ -66,6 +67,9 @@ class PlayerController {
 
     // ビデオ視聴: ビデオストリームのアクティブ状態を維持するために Keep-Alive API にリクエストを送るインターバルのキャンセルする関数
     private video_keep_alive_interval_timer_cancel: (() => void) | null = null;
+
+    // ビデオ視聴: 通信失敗時の保存版への切り替えが重複して走っているか
+    private is_offline_fallback_in_progress = false;
 
     // setupPlayerContainerResizeHandler() で利用する ResizeObserver
     // 保持しておかないと disconnect() で ResizeObserver を止められない
@@ -220,6 +224,7 @@ class PlayerController {
         // 破棄済みかどうかのフラグを下ろす
         this.destroyed = false;
         this.is_live_startup_temporary_muted = false;
+        this.is_offline_fallback_in_progress = false;
 
         // PlayerStore にプレイヤーを初期化したことを通知する
         // 実際にはこの時点ではプレイヤーの初期化は完了していないが、PlayerController.init() を実行したことが通知されることが重要
@@ -411,6 +416,27 @@ class PlayerController {
 
                 // ビデオ視聴: 録画番組情報がセットされているはず
                 } else {
+                    // オフライン保存では保存済みの1画質だけを hls.js へ渡し、通常の配信セッションを一切作らない
+                    if (player_store.is_offline_playback === true && player_store.offline_video !== null) {
+                        const offlineQualityName = `オフライン保存 (${OfflineVideos.formatQualityLabel(player_store.offline_video.quality)})`;
+                        const tileInfo = player_store.recorded_program.recorded_video.thumbnail_info?.tile ?? null;
+                        return {
+                            quality: [{
+                                name: offlineQualityName,
+                                type: 'hls',
+                                url: OfflineVideos.getPlaylistURL(player_store.offline_video),
+                            }],
+                            defaultQuality: offlineQualityName,
+                            thumbnails: tileInfo !== null ? {
+                                url: OfflineVideos.getAssetURL(player_store.offline_video, 'thumbnail-tiled.webp'),
+                                interval: tileInfo.interval_sec,
+                                width: tileInfo.tile_width,
+                                height: tileInfo.tile_height,
+                                columnCount: tileInfo.column_count,
+                            } : undefined,
+                        };
+                    }
+
                     // ビデオストリーミング API のベース URL
                     const streaming_api_base_url = `${Utils.api_base_url}/streams/video/${player_store.recorded_program.id}`;
                     // 画質リストを作成
@@ -498,7 +524,39 @@ class PlayerController {
                         options.success([]);
                     } else {
                         // ビデオ視聴: 過去ログコメントを取得して返す
-                        const jikkyo_comments = await Videos.fetchVideoJikkyoComments(player_store.recorded_program.id);
+                        // オフライン保存では保存時点の実況コメントを読み、通常再生では従来の API を利用する
+                        let jikkyo_comments: IJikkyoComments;
+                        if (player_store.is_offline_playback === true && player_store.offline_video !== null) {
+                            const empty_jikkyo_comments: IJikkyoComments = {
+                                is_success: true,
+                                comments: [],
+                                detail: '保存時点の過去ログコメントはありません。',
+                            };
+                            try {
+                                const response = await fetch(OfflineVideos.getAssetURL(player_store.offline_video, 'jikkyo.json'));
+                                const saved_jikkyo_comments = response.ok === true ? await response.json() as unknown : null;
+
+                                // 保存データが破損していても後続のコメント変換で例外を起こさず、コメントなしで再生を続ける
+                                if (saved_jikkyo_comments !== null && typeof saved_jikkyo_comments === 'object' &&
+                                    'is_success' in saved_jikkyo_comments && typeof saved_jikkyo_comments.is_success === 'boolean' &&
+                                    'detail' in saved_jikkyo_comments && typeof saved_jikkyo_comments.detail === 'string' &&
+                                    'comments' in saved_jikkyo_comments && Array.isArray(saved_jikkyo_comments.comments) &&
+                                    saved_jikkyo_comments.comments.every(comment => comment !== null && typeof comment === 'object' &&
+                                        typeof comment.time === 'number' && ['top', 'right', 'bottom'].includes(comment.type) &&
+                                        ['big', 'medium', 'small'].includes(comment.size) && typeof comment.color === 'string' &&
+                                        typeof comment.author === 'string' && typeof comment.text === 'string')) {
+                                    jikkyo_comments = saved_jikkyo_comments as IJikkyoComments;
+                                } else {
+                                    jikkyo_comments = empty_jikkyo_comments;
+                                }
+                            } catch (error) {
+                                // 付随データの欠損でプレイヤー初期化を止めず、コメントなしの保存映像として再生を続ける
+                                console.warn('\u001b[31m[PlayerController] Failed to read the saved jikkyo comments:', error);
+                                jikkyo_comments = empty_jikkyo_comments;
+                            }
+                        } else {
+                            jikkyo_comments = await Videos.fetchVideoJikkyoComments(player_store.recorded_program.id);
+                        }
                         if (jikkyo_comments.is_success === false) {
                             // 取得に失敗した場合はコメントリストにエラーメッセージを表示する
                             // ただし「この録画番組の過去ログコメントは存在しないか、現在取得中です。」の場合はエラー扱いしない
@@ -608,9 +666,10 @@ class PlayerController {
                     // startPosition に視聴履歴などから求めた再生位置を渡し、ロード開始時点で正しい Media Sequence を選択させる
                     // これを指定しないと manifest 解析後に sequence=0 からフラグメント取得が始まってしまう
                     startPosition: seek_seconds,
-                    // カスタムバッファコントローラーを設定
+                    // 通常再生ではサーバー側のエンコード済み範囲と連携し、保存再生では完結した HLS を標準実装で扱う
+                    // 保存版には buffer.m3u8 の SSE がないため、CustomBufferController を使うとシーク時に存在しない URL へ接続してしまう
                     // @ts-ignore
-                    bufferController: CustomBufferController,
+                    bufferController: player_store.is_offline_playback === true ? Hls.DefaultConfig.bufferController : CustomBufferController,
                     // プレイリスト / セグメントのリクエスト時のタイムアウトを回避する
                     manifestLoadPolicy: {
                         default: {
@@ -1104,7 +1163,7 @@ class PlayerController {
         // HLS プレイリストやセグメントのリクエストが行われたタイミングでも Keep-Alive が行われるが、
         // それだけではタイミング次第では十分ではないため、定期的に Keep-Alive を行う
         // Keep-Alive が行われなくなったタイミングで、サーバー側で自動的にビデオストリームの終了処理 (エンコードタスクの停止) が行われる
-        if (this.playback_mode === 'Video') {
+        if (this.playback_mode === 'Video' && player_store.is_offline_playback === false) {
             this.video_keep_alive_interval_timer_cancel = Utils.setIntervalInWorker(async () => {
                 // 画質切り替えでベース URL が変わることも想定し、あえて毎回 API URL を取得している
                 if (this.player === null) return;
@@ -1406,6 +1465,30 @@ class PlayerController {
                         }
                     };
                     hls_plugin.on(Hls.Events.FRAG_BUFFERED, resetStartPosition);
+
+                    // 通常の HLS 配信が通信エラーで復旧不能になった場合だけ、同じ録画の保存版へ現在位置を保って切り替える
+                    hls_plugin.on(Hls.Events.ERROR, async (_event, data) => {
+                        if (data.fatal !== true || data.type !== Hls.ErrorTypes.NETWORK_ERROR ||
+                            player_store.is_offline_playback === true || this.is_offline_fallback_in_progress === true) {
+                            return;
+                        }
+                        this.is_offline_fallback_in_progress = true;
+                        const offlineVideo = await OfflineVideos.getVideo(player_store.recorded_program.id);
+                        if (this.destroyed === true || this.player === null || offlineVideo === null) {
+                            this.is_offline_fallback_in_progress = false;
+                            return;
+                        }
+
+                        // 保存時点の番組情報と保存世代を同時に切り替え、オンライン側の別ファイル情報を保存映像へ混在させない
+                        player_store.recorded_program = offlineVideo.program;
+                        player_store.is_offline_playback = true;
+                        player_store.offline_video = offlineVideo;
+                        player_store.event_emitter.emit('PlayerRestartRequired', {
+                            message: '通信できないため、オフライン保存した映像へ切り替えました。',
+                            should_resume_quality: false,
+                            is_error_message: false,
+                        });
+                    });
                 } else {
                     // 実はなぜか hls.js を使わずとも Safari では普通に Native HLS 再生できてしまうようなので、警告を出しつつ何もしない
                     // DPlayer 側の機能により、Native HLS 再生であっても字幕は表示される
@@ -1658,52 +1741,57 @@ class PlayerController {
             player_store.is_player_setting_panel_open = true;
         };
 
-        // モバイル回線プロファイルに切り替えるボタンを動的に追加する
-        this.player.template.audio.insertAdjacentHTML('afterend', `
-            <div class="dplayer-setting-item dplayer-setting-mobile-profile">
-                <span class="dplayer-label">モバイル回線向け画質</span>
-                <div class="dplayer-toggle">
-                    <input class="dplayer-mobile-profile-setting-input" type="checkbox" name="dplayer-toggle-mobile-profile">
-                    <label for="dplayer-toggle-mobile-profile" style="--theme-color:#E64F97"></label>
+        const is_offline_playback = this.playback_mode === 'Video' && player_store.is_offline_playback === true;
+
+        // オフライン再生では通信節約モードや画質プロファイル切り替えは無関係なので、該当スイッチを設定パネルへ追加しない
+        if (is_offline_playback === false) {
+            // モバイル回線プロファイルに切り替えるボタンを動的に追加する
+            this.player.template.audio.insertAdjacentHTML('afterend', `
+                <div class="dplayer-setting-item dplayer-setting-mobile-profile">
+                    <span class="dplayer-label">モバイル回線向け画質</span>
+                    <div class="dplayer-toggle">
+                        <input class="dplayer-mobile-profile-setting-input" type="checkbox" name="dplayer-toggle-mobile-profile">
+                        <label for="dplayer-toggle-mobile-profile" style="--theme-color:#E64F97"></label>
+                    </div>
                 </div>
-            </div>
-        `);
+            `);
 
-        // デフォルトのチェック状態を画質プロファイルタイプに合わせる
-        const toggle_mobile_profile_input = this.player.container.querySelector<HTMLInputElement>('.dplayer-mobile-profile-setting-input')!;
-        toggle_mobile_profile_input.checked = this.quality_profile_type === 'Cellular';
+            // デフォルトのチェック状態を画質プロファイルタイプに合わせる
+            const toggle_mobile_profile_input = this.player.container.querySelector<HTMLInputElement>('.dplayer-mobile-profile-setting-input')!;
+            toggle_mobile_profile_input.checked = this.quality_profile_type === 'Cellular';
 
-        // モバイル回線プロファイルに切り替えるボタンがクリックされた時のイベントハンドラーを登録
-        const toggle_mobile_profile_button = this.player.container.querySelector('.dplayer-setting-mobile-profile')!;
-        toggle_mobile_profile_button.addEventListener('click', () => {
-            // チェックボックスの状態を切り替える
-            toggle_mobile_profile_input.checked = !toggle_mobile_profile_input.checked;
-            // 画質プロファイルをモバイル回線向けに切り替えてから、プレイヤーを再起動
-            if (toggle_mobile_profile_input.checked) {
-                this.quality_profile_type = 'Cellular';
-                player_store.selected_quality_profile_type = this.quality_profile_type;
-                player_store.event_emitter.emit('PlayerRestartRequired', {
-                    message: 'モバイル回線向けの画質プロファイルに切り替えました。',
-                    // 他の通知と被らないように、メッセージを遅らせて表示する
-                    message_delay_seconds: this.quality_profile.tv_low_latency_mode || this.playback_mode === 'Video' ? 2 : 4.5,
-                    is_error_message: false,
-                    // モバイル回線プロファイル切り替え時、切り替え後の画質プロファイルのデフォルト画質を優先する
-                    should_resume_quality: false,
-                });
-            // 画質プロファイルを Wi-Fi 回線向けに切り替えてから、プレイヤーを再起動
-            } else {
-                this.quality_profile_type = 'Wi-Fi';
-                player_store.selected_quality_profile_type = this.quality_profile_type;
-                player_store.event_emitter.emit('PlayerRestartRequired', {
-                    message: 'Wi-Fi 回線向けの画質プロファイルに切り替えました。',
-                    // 他の通知と被らないように、メッセージを遅らせて表示する
-                    message_delay_seconds: this.quality_profile.tv_low_latency_mode || this.playback_mode === 'Video' ? 2 : 4.5,
-                    is_error_message: false,
-                    // Wi-Fi プロファイル切り替え時、切り替え後の画質プロファイルのデフォルト画質を優先する
-                    should_resume_quality: false,
-                });
-            }
-        });
+            // モバイル回線プロファイルに切り替えるボタンがクリックされた時のイベントハンドラーを登録
+            const toggle_mobile_profile_button = this.player.container.querySelector('.dplayer-setting-mobile-profile')!;
+            toggle_mobile_profile_button.addEventListener('click', () => {
+                // チェックボックスの状態を切り替える
+                toggle_mobile_profile_input.checked = !toggle_mobile_profile_input.checked;
+                // 画質プロファイルをモバイル回線向けに切り替えてから、プレイヤーを再起動
+                if (toggle_mobile_profile_input.checked) {
+                    this.quality_profile_type = 'Cellular';
+                    player_store.selected_quality_profile_type = this.quality_profile_type;
+                    player_store.event_emitter.emit('PlayerRestartRequired', {
+                        message: 'モバイル回線向けの画質プロファイルに切り替えました。',
+                        // 他の通知と被らないように、メッセージを遅らせて表示する
+                        message_delay_seconds: this.quality_profile.tv_low_latency_mode || this.playback_mode === 'Video' ? 2 : 4.5,
+                        is_error_message: false,
+                        // モバイル回線プロファイル切り替え時、切り替え後の画質プロファイルのデフォルト画質を優先する
+                        should_resume_quality: false,
+                    });
+                // 画質プロファイルを Wi-Fi 回線向けに切り替えてから、プレイヤーを再起動
+                } else {
+                    this.quality_profile_type = 'Wi-Fi';
+                    player_store.selected_quality_profile_type = this.quality_profile_type;
+                    player_store.event_emitter.emit('PlayerRestartRequired', {
+                        message: 'Wi-Fi 回線向けの画質プロファイルに切り替えました。',
+                        // 他の通知と被らないように、メッセージを遅らせて表示する
+                        message_delay_seconds: this.quality_profile.tv_low_latency_mode || this.playback_mode === 'Video' ? 2 : 4.5,
+                        is_error_message: false,
+                        // Wi-Fi プロファイル切り替え時、切り替え後の画質プロファイルのデフォルト画質を優先する
+                        should_resume_quality: false,
+                    });
+                }
+            });
+        }
 
         // 設定パネルにL字画面のクロップ設定を表示するボタンを動的に追加する
         this.player.template.settingOriginPanel.insertAdjacentHTML('beforeend', `
