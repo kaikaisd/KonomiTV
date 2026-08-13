@@ -3,11 +3,13 @@ name: Lint and Test
 
 # サーバー/クライアントのソースコードに変更があったとき or
 # .github/workflows/lint_and_test.yaml (このファイル) に変更があったとき or 手動実行
-## custom-features ブランチへの push と、custom-features ブランチ宛のプルリクエストの両方で実行する
+## custom-features ブランチと作業ブランチへの push、および custom-features ブランチ宛のプルリクエストで実行する
+## 作業ブランチでもプルリクエストを作る前に静的チェックの結果を得られるようにしている
 on:
   push:
     branches:
       - custom-features
+      - 'claude/**'
     paths:
       - 'server/**'
       - 'client/**'
