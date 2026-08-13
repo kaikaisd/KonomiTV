@@ -178,7 +178,7 @@
                             </template>
                             <v-list-item-title class="ml-3">エンコード済みファイルをダウンロード</v-list-item-title>
                         </v-list-item>
-                        <v-list-item @click="reanalyzeVideo" v-ftooltip="'再生時に必要な録画ファイル情報・番組情報・サムネイルなどをすべて再解析・再生成します（数分かかります）'">
+                        <v-list-item @click="showReanalyzeDialog()" v-ftooltip="'再生時に必要な録画ファイル情報・番組情報・サムネイルなどをすべて再解析・再生成します（数分かかります）'">
                             <template v-slot:prepend>
                                 <Icon icon="fluent:book-arrow-clockwise-20-regular" width="20px" height="20px" />
                             </template>
@@ -361,6 +361,47 @@
             </v-card-actions>
         </v-card>
     </v-dialog>
+
+    <!-- メタデータ再解析の確認ダイアログ -->
+    <v-dialog v-model="show_reanalyze_confirmation" max-width="650px" scrollable>
+        <v-card class="reanalyze-confirmation">
+            <v-card-title class="pt-6 px-6 pb-2">
+                <Icon icon="fluent:book-arrow-clockwise-20-regular" width="22px" height="22px" />
+                <span class="ml-3">メタデータを再解析</span>
+            </v-card-title>
+            <v-card-text class="px-6 pb-3">
+                <div class="text-subtitle-1 font-weight-bold mb-3">{{ program.title }}</div>
+                <div class="reanalyze-confirmation__file-path mb-4">{{ program.recorded_video.file_path }}</div>
+                <div class="mb-4">
+                    再生時に必要な録画ファイル情報や番組情報などを解析し直します。<br>
+                    複数のチャンネルが含まれる録画ファイルの場合、特定のチャンネルを選択して解析できます。
+                </div>
+                <div v-if="is_loading_available_channels" class="d-flex align-center mb-4">
+                    <v-progress-circular indeterminate size="20" />
+                    <span class="ml-2">選択可能なチャンネルを取得中...</span>
+                </div>
+                <div v-else-if="available_channels !== null && available_channels.length > 1" class="mb-4">
+                    <div class="text-subtitle-2 mb-2">解析するチャンネルを選択してください:</div>
+                    <v-radio-group v-model="selected_service_id" hide-details>
+                        <v-radio label="自動選択（推奨）" :value="null" />
+                        <v-radio v-for="channel in available_channels" :key="channel.service_id"
+                            :label="`${channel.channel_name} (Service ID: ${channel.service_id})`"
+                            :value="channel.service_id" />
+                    </v-radio-group>
+                </div>
+                <div v-else-if="available_channels !== null && available_channels.length === 1" class="mb-4">
+                    <div class="text-subtitle-2">このファイルに含まれるチャンネル:</div>
+                    <div>{{ available_channels[0].channel_name }} (Service ID: {{ available_channels[0].service_id }})</div>
+                </div>
+            </v-card-text>
+            <v-card-actions class="pt-4 px-6 pb-6">
+                <v-spacer></v-spacer>
+                <v-btn variant="text" @click="cancelReanalyzeDialog()">キャンセル</v-btn>
+                <v-btn color="secondary" variant="flat" :disabled="is_loading_available_channels"
+                    @click="executeReanalyze()">再解析を開始</v-btn>
+            </v-card-actions>
+        </v-card>
+    </v-dialog>
 </template>
 <script lang="ts" setup>
 
@@ -413,6 +454,17 @@ const emit = defineEmits<{
 const show_video_info = ref(false);
 // 削除確認ダイアログの表示状態
 const show_delete_confirmation = ref(false);
+// メタデータ再解析の確認ダイアログの表示状態
+const show_reanalyze_confirmation = ref(false);
+// 録画ファイルに含まれる選択可能なチャンネル一覧 (未取得時は null)
+const available_channels = ref<IRecordedVideoAvailableChannel[] | null>(null);
+// 解析対象として選択された service_id (null の場合はサーバー側の自動判定に任せる)
+const selected_service_id = ref<number | null>(null);
+// 選択可能なチャンネル一覧の取得中かどうか
+const is_loading_available_channels = ref(false);
+// チャンネル取得処理を識別するためのリクエスト ID
+// ダイアログを開き直した際に、古いリクエストの結果で表示を上書きしてしまわないようにするために使う
+let available_channels_request_id = 0;
 // シリーズ除外確認ダイアログの表示状態
 const show_remove_from_series = ref(false);
 // エンコードキュー追加ダイアログの表示状態
@@ -489,10 +541,40 @@ const downloadEncodedVideo = () => {
     }
 };
 
-// メタデータ再解析
-const reanalyzeVideo = async () => {
+// メタデータ再解析の確認ダイアログを表示し、選択可能なチャンネル一覧を取得する
+const showReanalyzeDialog = async () => {
+
+    // 開き直した場合に備えて、進行中のリクエストを無効化した上で状態を初期化する
+    available_channels_request_id++;
+    const request_id = available_channels_request_id;
+    show_reanalyze_confirmation.value = true;
+    is_loading_available_channels.value = true;
+    available_channels.value = null;
+    selected_service_id.value = null;
+
+    const channels = await Videos.fetchVideoAvailableChannels(props.program.id);
+
+    // 取得中にダイアログを閉じたり開き直したりしていた場合は、結果を反映しない
+    if (request_id !== available_channels_request_id) {
+        return;
+    }
+    available_channels.value = channels ?? [];
+    is_loading_available_channels.value = false;
+};
+
+// メタデータ再解析の確認ダイアログを閉じる
+const cancelReanalyzeDialog = () => {
+    // 進行中のチャンネル取得処理の結果を破棄する
+    available_channels_request_id++;
+    is_loading_available_channels.value = false;
+    show_reanalyze_confirmation.value = false;
+};
+
+// メタデータ再解析を実行
+const executeReanalyze = async () => {
+    show_reanalyze_confirmation.value = false;
     Message.success('メタデータの再解析を開始します。完了までしばらくお待ちください。');
-    const result = await Videos.reanalyzeVideo(props.program.id);
+    const result = await Videos.reanalyzeVideo(props.program.id, selected_service_id.value ?? undefined);
     if (result === true) {
         Message.success('メタデータの再解析が完了しました。');
     }
@@ -1557,6 +1639,17 @@ const removeFromSeries = async () => {
 }
 
 .delete-confirmation {
+    &__file-path {
+        padding: 12px;
+        background-color: rgb(var(--v-theme-background-lighten-1));
+        border-radius: 4px;
+        font-size: 14px;
+        word-break: break-all;
+        white-space: pre-wrap;
+    }
+}
+
+.reanalyze-confirmation {
     &__file-path {
         padding: 12px;
         background-color: rgb(var(--v-theme-background-lighten-1));

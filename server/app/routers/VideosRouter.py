@@ -859,6 +859,42 @@ async def VideoJikkyoCommentsAPI(
     )
 
 
+@router.get(
+    '/{video_id}/available-channels',
+    summary = '録画番組選択可能チャンネル一覧 API',
+    response_description = '録画 TS ファイルに多重化されている、選択可能なチャンネルのリスト。',
+    response_model = list[schemas.RecordedVideoAvailableChannel],
+)
+async def VideoAvailableChannelsAPI(
+    recorded_program: Annotated[RecordedProgram, Depends(GetRecordedProgram)],
+) -> list[schemas.RecordedVideoAvailableChannel]:
+    """
+    指定された録画番組の TS ファイルに含まれる、選択可能なチャンネルの一覧を取得する。<br>
+    マルチ編成や CS 放送など、1つの TS ファイルに複数サービスが多重化されている場合に、
+    メタデータ再解析でどのチャンネルとして解析するかを選ぶために利用する。
+    """
+
+    # MPEG-TS 形式以外の録画ファイルにはチャンネルの多重化という概念がないため、常に空のリストを返す
+    if recorded_program.recorded_video.container_format != 'MPEG-TS':
+        return []
+
+    try:
+        # TSInfoAnalyzer は Pydantic スキーマを受け取る設計のため、Tortoise ORM のモデルから変換する
+        recorded_video = await schemas.RecordedVideo.from_tortoise_orm(recorded_program.recorded_video)
+
+        # TS ファイルの読み込みは同期 I/O のため、イベントループをブロックしないよう別スレッドで実行する
+        def CollectAllChannels() -> list[schemas.RecordedVideoAvailableChannel]:
+            return TSInfoAnalyzer(recorded_video).collectAllChannels()
+        return await asyncio.to_thread(CollectAllChannels)
+
+    except Exception as ex:
+        logging.error(f'[VideoAvailableChannelsAPI] Failed to get available channels for video_id {recorded_program.id}:', exc_info=ex)
+        raise HTTPException(
+            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail = 'Failed to get available channels',
+        )
+
+
 @router.post(
     '/{video_id}/reanalyze',
     summary = '録画番組メタデータ再解析 API',
@@ -866,9 +902,11 @@ async def VideoJikkyoCommentsAPI(
 )
 async def VideoReanalyzeAPI(
     recorded_program: Annotated[RecordedProgram, Depends(GetRecordedProgram)],
+    selected_service_id: Annotated[int | None, Query(description='解析対象として使用する service_id 。複数チャンネルを含む TS ファイルでのみ指定する。')] = None,
 ):
     """
-    指定された録画番組のメタデータ（動画情報・番組情報・サムネイル画像・CM 区間情報など）をすべて再解析・再生成する。
+    指定された録画番組のメタデータ（動画情報・番組情報・サムネイル画像・CM 区間情報など）をすべて再解析・再生成する。<br>
+    selected_service_id を指定すると、複数チャンネルを含む TS ファイルのうち指定したチャンネルとして解析し直す。
     """
 
     try:
@@ -882,6 +920,8 @@ async def VideoReanalyzeAPI(
             force_update = True,
             # API レスポンスの返却をもってメタデータ再解析が完全に完了したことをユーザーに伝えるため、バックグラウンド解析タスクが完了するまで待つ
             wait_background_analysis = True,
+            # ユーザーが明示的にチャンネルを選択している場合、そのチャンネルとして解析する
+            selected_service_id = selected_service_id,
         )
 
     except Exception as ex:

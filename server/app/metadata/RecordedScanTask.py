@@ -515,6 +515,7 @@ class RecordedScanTask:
         force_update: bool = False,
         wait_background_analysis: bool = False,
         recording_complete: bool = False,
+        selected_service_id: int | None = None,
     ) -> None:
         """
         指定された録画ファイルのメタデータを解析し、DB に永続化する
@@ -529,6 +530,8 @@ class RecordedScanTask:
             wait_background_analysis (bool): バックグラウンド解析が完了するまで待つかどうか (デフォルト: False)
             recording_complete (bool): __checkRecordingCompletion() から録画完了後の処理として呼ばれた場合に True を設定する (デフォルト: False)
                 True の場合、__handleFileChange() との競合により _recording_files に再追加されていても is_recording フラグをリセットして解析を続行する
+            selected_service_id (int | None): ユーザーが明示的に選択した service_id (デフォルト: None)
+                複数チャンネルを含む TS ファイルの再解析時に、どのチャンネルとして解析するかを指定する
         """
 
         # ファイルパスに対応するロックを取得または作成
@@ -685,7 +688,7 @@ class RecordedScanTask:
                 ## コンテキストマネージャーはキャンセル時にも子プロセス終了を同期的に待つため、イベントループ上では使わない
                 ## 正常完了時は明示的に待ってクリーンアップし、リクエスト切断時だけ待機なしで解放処理へ進める
                 loop = asyncio.get_running_loop()
-                analyzer = MetadataAnalyzer(pathlib.Path(str(file_path)))  # anyio.Path -> pathlib.Path に変換
+                analyzer = MetadataAnalyzer(pathlib.Path(str(file_path)), selected_service_id)  # anyio.Path -> pathlib.Path に変換
                 executor = concurrent.futures.ProcessPoolExecutor(max_workers=1)
                 should_wait_executor = True
                 try:

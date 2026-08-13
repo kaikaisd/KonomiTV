@@ -204,15 +204,23 @@ class MetadataAnalyzer:
     ## 末尾サンプルでも同じ値を使い、割合指定だけでは短くなりやすい小さめの録画でも PMT を拾える範囲を確保する
     MAX_STREAM_SCAN_BYTES: ClassVar[int] = 8 * 1024 * 1024
 
-    def __init__(self, recorded_file_path: Path) -> None:
+    def __init__(self, recorded_file_path: Path, selected_service_id: int | None = None) -> None:
         """
         録画ファイルのメタデータを解析するクラスを初期化する
 
         Args:
             recorded_file_path (Path): 録画ファイルのパス
+            selected_service_id (int | None): ユーザーが明示的に選択した service_id
+                複数チャンネルを含む TS ファイルの再解析時に、どのチャンネルの情報を採用するかを指定する
+                指定された場合、FFprobe による自動判定よりも優先される
         """
 
+        # 解析対象の録画ファイルのパス
         self.recorded_file_path = recorded_file_path
+
+        # ユーザーが明示的に選択した service_id (未選択時は None)
+        # __analyzeMPEGTS() で TSInfoAnalyzer へ渡す service_id の決定に参照される
+        self.selected_service_id = selected_service_id
 
 
     def analyze(self) -> schemas.RecordedProgram | None:
@@ -543,6 +551,14 @@ class MetadataAnalyzer:
                         f'(nb_streams: {program.nb_streams}, pcr_pid: {program.pcr_pid}).'
                     )
                     break
+
+            # ユーザーが明示的にチャンネルを選択している場合は、FFprobe による自動判定よりもそちらを優先する
+            ## 自動判定が意図しないサブチャンネルを選んでしまった録画を、ユーザーが手動で修正できるようにするため
+            if self.selected_service_id is not None:
+                preferred_service_id = self.selected_service_id
+                logging.info(
+                    f'{self.recorded_file_path}: Using user-selected service_id {preferred_service_id}.'
+                )
 
             # TS ファイルに含まれる番組情報・チャンネル情報を解析する
             analyzer = TSInfoAnalyzer(recorded_video, end_ts_offset=end_ts_offset, preferred_service_id=preferred_service_id)

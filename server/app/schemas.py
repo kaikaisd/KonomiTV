@@ -239,6 +239,14 @@ class RecordedProgram(PydanticModel):
     created_at: datetime
     updated_at: datetime
 
+class RecordedVideoAvailableChannel(BaseModel):
+    """ 1つの録画 TS ファイルに多重化されている、選択可能なチャンネル情報 """
+    service_id: int
+    channel_name: str
+    network_id: int
+    transport_stream_id: int | None
+    channel_type: str
+
 class RecordedPrograms(BaseModel):
     total: int
     recorded_programs: list[RecordedProgram]
