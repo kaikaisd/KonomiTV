@@ -164,6 +164,15 @@ export const IRecordedProgramDefault: IRecordedProgram = {
     updated_at: '2000-01-01T00:00:00+09:00',
 };
 
+/** 1つの録画 TS ファイルに多重化されている、選択可能なチャンネル情報を表すインターフェース */
+export interface IRecordedVideoAvailableChannel {
+    service_id: number;
+    channel_name: string;
+    network_id: number;
+    transport_stream_id: number | null;
+    channel_type: string;
+}
+
 /** 録画番組情報リストを表すインターフェース */
 export interface IRecordedPrograms {
     total: number;
@@ -213,9 +222,12 @@ class Videos {
      * @param order ソート順序 ('desc' or 'asc' or 'ids')
      * @param page ページ番号
      * @param ids 録画番組の ID のリスト
+     * @param channel_id チャンネル ID (指定時は同一チャンネルの録画番組に絞り込む)
+     * @param genre ジャンル名 (指定時は指定されたジャンルを含む録画番組に絞り込む)
      * @returns 録画番組一覧情報 or 録画番組一覧情報の取得に失敗した場合は null
      */
-    static async fetchVideos(order: 'desc' | 'asc' | 'ids' = 'desc', page: number = 1, ids: number[] | null = null): Promise<IRecordedPrograms | null> {
+    static async fetchVideos(order: 'desc' | 'asc' | 'ids' = 'desc', page: number = 1, ids: number[] | null = null,
+        channel_id: string | null = null, genre: string | null = null): Promise<IRecordedPrograms | null> {
 
         // API リクエストを実行
         const response = await APIClient.get<IRecordedPrograms>('/videos', {
@@ -223,6 +235,8 @@ class Videos {
                 order,
                 page,
                 ids,
+                channel_id,
+                genre,
             },
             // 録画番組の ID のリストを FastAPI が受け付ける &ids=1&ids=2&ids=3&... の形式にエンコードする
             // ref: https://github.com/axios/axios/issues/5058#issuecomment-1272107602
@@ -318,14 +332,37 @@ class Videos {
 
 
     /**
+     * 録画番組の TS ファイルに含まれる、選択可能なチャンネル一覧を取得する
+     * マルチ編成や CS 放送など、1つの TS ファイルに複数チャンネルが多重化されている場合に利用する
+     * @param video_id 録画番組の ID
+     * @returns 選択可能なチャンネル一覧 or 取得に失敗した場合は null
+     */
+    static async fetchVideoAvailableChannels(video_id: number): Promise<IRecordedVideoAvailableChannel[] | null> {
+
+        // API リクエストを実行
+        const response = await APIClient.get<IRecordedVideoAvailableChannel[]>(`/videos/${video_id}/available-channels`);
+
+        // エラー処理
+        if (response.type === 'error') {
+            APIClient.showGenericError(response, '選択可能なチャンネル一覧を取得できませんでした。');
+            return null;
+        }
+
+        return response.data;
+    }
+
+
+    /**
      * 録画番組のメタデータを再解析する
      * @param video_id 録画番組の ID
+     * @param selected_service_id 解析対象として使用する service_id (複数チャンネルを含む TS ファイルでのみ指定する)
      * @returns メタデータ再解析に成功した場合は true
      */
-    static async reanalyzeVideo(video_id: number): Promise<boolean> {
+    static async reanalyzeVideo(video_id: number, selected_service_id?: number): Promise<boolean> {
 
         // API リクエストを実行
         const response = await APIClient.post(`/videos/${video_id}/reanalyze`, undefined, {
+            params: selected_service_id !== undefined ? { selected_service_id } : undefined,
             // 数分以上かかるのでタイムアウトを 10 分に設定
             timeout: 10 * 60 * 1000,
         });

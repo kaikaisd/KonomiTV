@@ -912,6 +912,76 @@ class TSInfoAnalyzer:
         return None
 
 
+    def collectAllChannels(self) -> list[schemas.RecordedVideoAvailableChannel]:
+        """
+        録画 TS ファイルに含まれる、選択可能なチャンネルの一覧を収集する
+        マルチ編成や CS 放送など、1つの TS ファイルに複数サービスが多重化されている場合に、
+        ユーザーがどのチャンネルとして解析するかを選べるようにするために使用する
+
+        Returns:
+            list[schemas.RecordedVideoAvailableChannel]: 選択可能なチャンネル情報のリスト (取得できなかった場合は空のリスト)
+        """
+
+        # 誤動作防止のため必ず最初にシークを戻す
+        self.ts.seek(0)
+
+        # PAT に含まれる service_id をすべて収集する
+        ## 冒頭にしか現れない情報ではないため、先頭付近だけを見て早期に打ち切る
+        available_service_ids: list[int] = []
+        transport_stream_id: int | None = None
+        for pat_count, pat in enumerate(self.ts.sections(ProgramAssociationSection)):
+            transport_stream_id = int(pat.transport_stream_id)
+            for pat_pid in pat.pids:
+                if pat_pid.program_number:
+                    available_service_ids.append(int(pat_pid.program_number))
+            # PAT は短い周期で繰り返し送出されるため、100 セクションも読めば十分に揃う
+            if pat_count >= 100:
+                break
+
+        # PAT が読めなかった場合、チャンネルを特定しようがないので空のリストを返す
+        if len(available_service_ids) == 0:
+            return []
+
+        # SDT から各サービスのチャンネル名を取得する
+        self.ts.seek(0)
+        all_channels: list[schemas.RecordedVideoAvailableChannel] = []
+        seen_service_ids: set[int] = set()
+        for sdt_count, sdt in enumerate(self.ts.sections(ActualStreamServiceDescriptionSection)):
+            network_id = int(sdt.original_network_id)
+            # 地上波・BS・CS のいずれにも該当しないネットワークは対象外とする
+            network_type = TSInformation.getNetworkType(network_id)
+            if network_type == 'OTHER':
+                continue
+
+            for service in sdt.services:
+                # PAT に存在しないサービスと、既に収集済みのサービスは飛ばす
+                if service.service_id not in available_service_ids or service.service_id in seen_service_ids:
+                    continue
+
+                # ServiceDescriptor からチャンネル名を取得する
+                channel_name: str | None = None
+                for service_descriptor in service.descriptors[ServiceDescriptor]:
+                    channel_name = TSInformation.formatString(service_descriptor.service_name)
+                    break
+
+                # チャンネル名が取得できなかったサービスは、ユーザーが選択しようがないため除外する
+                if channel_name is not None:
+                    all_channels.append(schemas.RecordedVideoAvailableChannel(
+                        service_id = service.service_id,
+                        channel_name = channel_name,
+                        network_id = network_id,
+                        transport_stream_id = transport_stream_id,
+                        channel_type = network_type,
+                    ))
+                    seen_service_ids.add(service.service_id)
+
+            # SDT も繰り返し送出されるため、PAT と同様に読み取り量を制限する
+            if sdt_count >= 100:
+                break
+
+        return all_channels
+
+
     @staticmethod
     def readPSIData(reader: BufferedReader, target_pids: list[int], callback: Callable[[float, int, bytes], bool]) -> bool:
         """

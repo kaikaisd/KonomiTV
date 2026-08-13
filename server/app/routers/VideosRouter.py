@@ -359,12 +359,15 @@ async def VideosAPI(
     order: Annotated[Literal['desc', 'asc', 'ids'], Query(description='ソート順序 (desc or asc or ids) 。ids を指定すると、ids パラメータで指定された順序を維持する。')] = 'desc',
     page: Annotated[int, Query(description='ページ番号。')] = 1,
     ids: Annotated[list[int] | None, Query(description='録画番組 ID のリスト。指定時は指定された ID の録画番組のみを返す。')] = None,
+    channel_id: Annotated[str | None, Query(description='チャンネル ID 。指定時は同一チャンネルの録画番組に絞り込む。')] = None,
+    genre: Annotated[str | None, Query(description='ジャンル名。指定時は指定されたジャンルを含む録画番組に絞り込む。')] = None,
 ):
     """
     すべての録画番組を一度に 30 件ずつ取得する。<br>
     order には "desc" か "asc" か "ids" を指定する。"ids" を指定すると、ids パラメータで指定された順序を維持する。<br>
     page (ページ番号) には 1 以上の整数を指定する。<br>
-    ids には録画番組 ID のリストを指定できる。指定時は指定された ID の録画番組のみを返す。
+    ids には録画番組 ID のリストを指定できる。指定時は指定された ID の録画番組のみを返す。<br>
+    channel_id / genre を指定すると、さらにチャンネル・ジャンルで絞り込める。
     """
 
     # 生 SQL クエリを構築
@@ -447,6 +450,19 @@ async def VideosAPI(
         LIMIT ? OFFSET ?
     """
 
+    # channel_id / genre による絞り込み条件を組み立てる
+    ## 条件式自体は固定文字列で、値はすべてプレースホルダー経由で渡すため SQL インジェクションの余地はない
+    filter_clauses: list[str] = []
+    filter_params: list[Any] = []
+    if channel_id is not None and channel_id != '':
+        filter_clauses.append('AND rp.channel_id = ?')
+        filter_params.append(channel_id)
+    if genre is not None and genre != '':
+        # genres は JSON カラムのため、ジャンル名を JSON 文字列として含むかどうかで絞り込む
+        filter_clauses.append('AND rp.genres LIKE ?')
+        filter_params.append(f'%"{genre}"%')
+    filter_where_clause = '\n        '.join(filter_clauses)
+
     # ids が指定されている場合は、指定された ID の録画番組のみを返す
     target_ids: list[int] | None = None
     if ids is not None:
@@ -455,50 +471,59 @@ async def VideosAPI(
             # ページングを考慮して必要な範囲の ID のみを使用
             target_ids = ids[(page - 1) * PAGE_SIZE:page * PAGE_SIZE]
             if not target_ids:
+                # 総数は生 SQL 側と同じ絞り込み条件を適用しないと、フィルタ指定時に件数が食い違ってしまう
+                total_query_set = RecordedProgram.all().filter(id__in=ids)
+                if channel_id is not None and channel_id != '':
+                    total_query_set = total_query_set.filter(channel_id=channel_id)
+                if genre is not None and genre != '':
+                    total_query_set = total_query_set.filter(genres__icontains=f'"{genre}"')
                 return schemas.RecordedPrograms(
-                    total = await RecordedProgram.all().filter(id__in=ids).count(),
+                    total = await total_query_set.count(),
                     recorded_programs = [],
                 )
 
             # IN 句のプレースホルダーを生成
             placeholders = ','.join(['?' for _ in target_ids])
             query = base_query.format(
-                where_clause = f'AND rp.id IN ({placeholders})',
+                where_clause = f'AND rp.id IN ({placeholders})\n        {filter_where_clause}',
                 order = 'DESC'  # order は無視されるが、SQL の構文上必要
             )
-            params = [*target_ids, str(PAGE_SIZE), '0']  # OFFSET は 0 固定
+            params = [*target_ids, *filter_params, str(PAGE_SIZE), '0']  # OFFSET は 0 固定
 
             # 総数を取得
-            total_query = 'SELECT COUNT(*) as count FROM recorded_programs WHERE id IN ({})'.format(
-                ','.join(['?' for _ in ids])
+            total_query = 'SELECT COUNT(*) as count FROM recorded_programs rp WHERE rp.id IN ({}) {}'.format(
+                ','.join(['?' for _ in ids]),
+                filter_where_clause,
             )
-            total_params = ids
+            total_params = [*ids, *filter_params]
 
         else:
             # 通常のソート順で取得
             query = base_query.format(
-                where_clause = f'AND rp.id IN ({",".join(["?" for _ in ids])})',
+                where_clause = f'AND rp.id IN ({",".join(["?" for _ in ids])})\n        {filter_where_clause}',
                 order = 'DESC' if order == 'desc' else 'ASC'
             )
-            params = [*ids, str(PAGE_SIZE), str((page - 1) * PAGE_SIZE)]
+            params = [*ids, *filter_params, str(PAGE_SIZE), str((page - 1) * PAGE_SIZE)]
 
             # 総数を取得
-            total_query = 'SELECT COUNT(*) as count FROM recorded_programs WHERE id IN ({})'.format(
-                ','.join(['?' for _ in ids])
+            total_query = 'SELECT COUNT(*) as count FROM recorded_programs rp WHERE rp.id IN ({}) {}'.format(
+                ','.join(['?' for _ in ids]),
+                filter_where_clause,
             )
-            total_params = ids
+            total_params = [*ids, *filter_params]
 
     else:
         # すべての録画番組を返す
         query = base_query.format(
-            where_clause = '',
+            where_clause = filter_where_clause,
             order = 'DESC' if order == 'desc' else 'ASC'
         )
-        params = [str(PAGE_SIZE), str((page - 1) * PAGE_SIZE)]
+        params = [*filter_params, str(PAGE_SIZE), str((page - 1) * PAGE_SIZE)]
 
         # 総数を取得
-        total_query = 'SELECT COUNT(*) as count FROM recorded_programs'
-        total_params = []
+        ## WHERE 句が空でも構文が壊れないよう、常に真となる条件を先頭に置く
+        total_query = f'SELECT COUNT(*) as count FROM recorded_programs rp WHERE 1=1 {filter_where_clause}'
+        total_params = [*filter_params]
 
     try:
         # データベースから直接クエリを実行
@@ -859,6 +884,42 @@ async def VideoJikkyoCommentsAPI(
     )
 
 
+@router.get(
+    '/{video_id}/available-channels',
+    summary = '録画番組選択可能チャンネル一覧 API',
+    response_description = '録画 TS ファイルに多重化されている、選択可能なチャンネルのリスト。',
+    response_model = list[schemas.RecordedVideoAvailableChannel],
+)
+async def VideoAvailableChannelsAPI(
+    recorded_program: Annotated[RecordedProgram, Depends(GetRecordedProgram)],
+) -> list[schemas.RecordedVideoAvailableChannel]:
+    """
+    指定された録画番組の TS ファイルに含まれる、選択可能なチャンネルの一覧を取得する。<br>
+    マルチ編成や CS 放送など、1つの TS ファイルに複数サービスが多重化されている場合に、
+    メタデータ再解析でどのチャンネルとして解析するかを選ぶために利用する。
+    """
+
+    # MPEG-TS 形式以外の録画ファイルにはチャンネルの多重化という概念がないため、常に空のリストを返す
+    if recorded_program.recorded_video.container_format != 'MPEG-TS':
+        return []
+
+    try:
+        # TSInfoAnalyzer は Pydantic スキーマを受け取る設計のため、Tortoise ORM のモデルから変換する
+        recorded_video = await schemas.RecordedVideo.from_tortoise_orm(recorded_program.recorded_video)
+
+        # TS ファイルの読み込みは同期 I/O のため、イベントループをブロックしないよう別スレッドで実行する
+        def CollectAllChannels() -> list[schemas.RecordedVideoAvailableChannel]:
+            return TSInfoAnalyzer(recorded_video).collectAllChannels()
+        return await asyncio.to_thread(CollectAllChannels)
+
+    except Exception as ex:
+        logging.error(f'[VideoAvailableChannelsAPI] Failed to get available channels for video_id {recorded_program.id}:', exc_info=ex)
+        raise HTTPException(
+            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail = 'Failed to get available channels',
+        )
+
+
 @router.post(
     '/{video_id}/reanalyze',
     summary = '録画番組メタデータ再解析 API',
@@ -866,9 +927,14 @@ async def VideoJikkyoCommentsAPI(
 )
 async def VideoReanalyzeAPI(
     recorded_program: Annotated[RecordedProgram, Depends(GetRecordedProgram)],
+    selected_service_id: Annotated[int | None, Query(description='解析対象として使用する service_id 。複数チャンネルを含む TS ファイルでのみ指定する。')] = None,
+    files_only: Annotated[bool, Query(description='ファイル情報のみを再解析し、CM 区間検出・サムネイル生成・キーフレーム解析をスキップするかどうか。')] = False,
 ):
     """
-    指定された録画番組のメタデータ（動画情報・番組情報・サムネイル画像・CM 区間情報など）をすべて再解析・再生成する。
+    指定された録画番組のメタデータ（動画情報・番組情報・サムネイル画像・CM 区間情報など）をすべて再解析・再生成する。<br>
+    selected_service_id を指定すると、複数チャンネルを含む TS ファイルのうち指定したチャンネルとして解析し直す。<br>
+    files_only を指定すると、トランスコード済みファイルへの差し替えを想定してファイル情報のみを更新し、
+    時間のかかる CM 区間検出・サムネイル生成・キーフレーム解析を省略する。
     """
 
     try:
@@ -882,6 +948,10 @@ async def VideoReanalyzeAPI(
             force_update = True,
             # API レスポンスの返却をもってメタデータ再解析が完全に完了したことをユーザーに伝えるため、バックグラウンド解析タスクが完了するまで待つ
             wait_background_analysis = True,
+            # ユーザーが明示的にチャンネルを選択している場合、そのチャンネルとして解析する
+            selected_service_id = selected_service_id,
+            # ファイル情報のみを再解析するかどうか
+            files_only = files_only,
         )
 
     except Exception as ex:

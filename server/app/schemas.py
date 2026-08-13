@@ -239,6 +239,14 @@ class RecordedProgram(PydanticModel):
     created_at: datetime
     updated_at: datetime
 
+class RecordedVideoAvailableChannel(BaseModel):
+    """ 1つの録画 TS ファイルに多重化されている、選択可能なチャンネル情報 """
+    service_id: int
+    channel_name: str
+    network_id: int
+    transport_stream_id: int | None
+    channel_type: str
+
 class RecordedPrograms(BaseModel):
     total: int
     recorded_programs: list[RecordedProgram]
@@ -322,6 +330,35 @@ class AccountLink(PydanticModel):
 
 class Users(RootModel[list[User]]):
     pass
+
+# ***** 視聴履歴 *****
+
+class WatchedHistory(BaseModel):
+    items: list[WatchedHistoryItem]
+
+class WatchedHistoryItem(BaseModel):
+    video_id: int
+    last_playback_position: Annotated[float, Field(ge=0)]
+    created_at: Annotated[float, Field(gt=0)]
+    updated_at: Annotated[float, Field(gt=0)]
+
+# ***** 端末ペアリング (OAuth 2.0 Device Authorization Grant 相当) *****
+
+class DeviceAuthCreateRequest(BaseModel):
+    device_name: Annotated[str, Field(min_length=1, max_length=100)]
+
+class DeviceAuthRequest(BaseModel):
+    device_code: str
+    user_code: str
+    verification_url: str
+    expires_in: int
+    interval: int
+
+class DeviceAuthApprovalRequest(BaseModel):
+    user_code: Annotated[str, Field(min_length=8, max_length=8)]
+
+class DeviceAuthTokenRequest(BaseModel):
+    device_code: Annotated[str, Field(min_length=32, max_length=100)]
 
 # ***** Twitter / Bluesky 連携 *****
 

@@ -94,6 +94,11 @@ class RecordedScanTask:
     # 録画中ファイルの最小データ長 (秒)
     MINIMUM_RECORDING_SECONDS: ClassVar[int] = 60
 
+    # 同一動画がトランスコードされたと判定する際の、録画時間の許容差異 (秒)
+    ## トランスコード時はエンコーダーの処理により再生時間が微小に変化することがあるため、完全一致は要求しない
+    ## 3秒という閾値は、その微小な差を許容しつつ、全く別の動画への差し替えを誤検出しないバランスとして設定している
+    TRANSCODE_DURATION_TOLERANCE: ClassVar[float] = 3.0
+
     # 継続更新を録画中と判断する最小時間 (秒)
     CONTINUOUS_UPDATE_THRESHOLD_SECONDS: ClassVar[int] = 60
 
@@ -515,6 +520,8 @@ class RecordedScanTask:
         force_update: bool = False,
         wait_background_analysis: bool = False,
         recording_complete: bool = False,
+        selected_service_id: int | None = None,
+        files_only: bool = False,
     ) -> None:
         """
         指定された録画ファイルのメタデータを解析し、DB に永続化する
@@ -529,6 +536,11 @@ class RecordedScanTask:
             wait_background_analysis (bool): バックグラウンド解析が完了するまで待つかどうか (デフォルト: False)
             recording_complete (bool): __checkRecordingCompletion() から録画完了後の処理として呼ばれた場合に True を設定する (デフォルト: False)
                 True の場合、__handleFileChange() との競合により _recording_files に再追加されていても is_recording フラグをリセットして解析を続行する
+            selected_service_id (int | None): ユーザーが明示的に選択した service_id (デフォルト: None)
+                複数チャンネルを含む TS ファイルの再解析時に、どのチャンネルとして解析するかを指定する
+            files_only (bool): ファイル情報のみを再解析するかどうか (デフォルト: False)
+                True の場合、CM 区間検出・サムネイル生成・キーフレーム解析といったバックグラウンド解析を行わない
+                トランスコード済みファイルへの差し替えを検出してファイル情報だけを更新したい場合に指定する
         """
 
         # ファイルパスに対応するロックを取得または作成
@@ -685,7 +697,7 @@ class RecordedScanTask:
                 ## コンテキストマネージャーはキャンセル時にも子プロセス終了を同期的に待つため、イベントループ上では使わない
                 ## 正常完了時は明示的に待ってクリーンアップし、リクエスト切断時だけ待機なしで解放処理へ進める
                 loop = asyncio.get_running_loop()
-                analyzer = MetadataAnalyzer(pathlib.Path(str(file_path)))  # anyio.Path -> pathlib.Path に変換
+                analyzer = MetadataAnalyzer(pathlib.Path(str(file_path)), selected_service_id)  # anyio.Path -> pathlib.Path に変換
                 executor = concurrent.futures.ProcessPoolExecutor(max_workers=1)
                 should_wait_executor = True
                 try:
@@ -740,6 +752,56 @@ class RecordedScanTask:
                     existing_db_recorded_video_after_analyze.file_hash == recorded_program.recorded_video.file_hash):
                     return
 
+                # 同一ファイルパスに既存レコードがあり、かつハッシュが変化している場合、
+                # 録画時間の差異から「同じ動画がトランスコードされたもの」かどうかを判定する
+                ## 同一動画のトランスコードであれば、EPG 由来の番組情報は引き続き有効なため、技術的なフィールドのみを更新する
+                is_transcoded_same_video = False
+                if existing_db_recorded_video_after_analyze is not None:
+                    old_file_hash = existing_db_recorded_video_after_analyze.file_hash
+                    new_file_hash = recorded_program.recorded_video.file_hash
+                    hash_changed = old_file_hash != new_file_hash
+
+                    # files_only モードではサムネイルを再生成しないため、ハッシュ変化時は既存のサムネイルを新しいハッシュ名にリネームする
+                    ## さもなければサムネイルが参照できなくなり、孤児ファイルとして削除されてしまう
+                    if files_only is True and hash_changed is True:
+                        thumbnails_dir = anyio.Path(str(THUMBNAILS_DIR))
+                        thumbnail_pairs = [
+                            (thumbnails_dir / f'{old_file_hash}{suffix}', thumbnails_dir / f'{new_file_hash}{suffix}')
+                            for suffix in ('.webp', '_tile.webp', '.jpg', '_tile.jpg')
+                        ]
+                        for old_thumbnail_path, new_thumbnail_path in thumbnail_pairs:
+                            try:
+                                if await old_thumbnail_path.is_file():
+                                    await old_thumbnail_path.rename(new_thumbnail_path)
+                                    logging.info(f'{old_thumbnail_path.name} -> {new_thumbnail_path.name}: Renamed thumbnail to match new hash (files_only mode).')
+                            except Exception as ex:
+                                logging.error(f'{old_thumbnail_path}: Error renaming thumbnail:', exc_info=ex)
+
+                    # 録画時間の差異が許容範囲内であれば、同一動画のトランスコードと判定する
+                    old_duration = existing_db_recorded_video_after_analyze.duration
+                    new_duration = recorded_program.recorded_video.duration
+                    duration_diff = abs(old_duration - new_duration)
+                    if duration_diff <= self.TRANSCODE_DURATION_TOLERANCE:
+                        is_transcoded_same_video = True
+                        logging.info(
+                            f'{file_path}: Detected transcoded video '
+                            f'(duration diff: {duration_diff:.2f}s, old: {old_duration:.1f}s -> new: {new_duration:.1f}s). '
+                            f'Preserving program metadata.'
+                        )
+                    else:
+                        # 録画時間が大きく変わっている場合はトランスコードではなく、別の動画への差し替えと判断する
+                        logging.info(
+                            f'{file_path}: Duration changed significantly '
+                            f'(diff: {duration_diff:.2f}s, old: {old_duration:.1f}s -> new: {new_duration:.1f}s). '
+                            f'Treating as different video.'
+                        )
+
+                # ユーザーが明示的に再解析を要求した場合は、番組情報の更新を優先する
+                ## 番組情報が誤っていたために再解析しているケースがあるため、トランスコード判定より force_update を優先させる
+                if force_update is True and is_transcoded_same_video is True:
+                    logging.info(f'{file_path}: Force update enabled, overriding transcoded update mode.')
+                    is_transcoded_same_video = False
+
                 # 録画中のファイルとして処理
                 ## 他ドライブからファイルコピー中のファイルも、実際の録画処理より高速に書き込まれるだけで随時書き込まれることに変わりはないので、
                 ## 録画中として判断されることがある（その場合、ファイルコピーが完了した段階で「録画完了」扱いとなる）
@@ -770,13 +832,18 @@ class RecordedScanTask:
 
                 # DB に永続化
                 # メタデータ解析後の最新のデータベース情報を使う
-                await self.__saveRecordedMetadataToDB(recorded_program, existing_db_recorded_video_after_analyze)
+                await self.__saveRecordedMetadataToDB(
+                    recorded_program,
+                    existing_db_recorded_video_after_analyze,
+                    is_transcoded_same_video,
+                )
                 logging.info(f'{file_path}: {"Updated" if existing_db_recorded_video_after_analyze else "Saved"} metadata to DB. (status: {recorded_program.recorded_video.status})')
 
                 # DB への永続化が完了したら、録画完了後のバックグラウンド解析タスクを開始
                 ## "Recording" 状態の録画ファイルはまだ録画が完了していないので、サムネイル生成などの解析タスクは実行しない
                 ## DB 保存に失敗した状態で開始すると、RecordedVideo が存在しないままサムネイル生成だけが進んでしまうため、この処理は永続化後に実行する必要がある
-                if recorded_program.recorded_video.status == 'Recorded':
+                ## files_only モードでは CM 区間検出・サムネイル生成・キーフレーム解析をすべてスキップする
+                if recorded_program.recorded_video.status == 'Recorded' and files_only is False:
                     if file_path not in self._background_tasks:
                         task = asyncio.create_task(self.__runBackgroundAnalysis(recorded_program))
                         self._background_tasks[file_path] = task
@@ -1269,6 +1336,7 @@ class RecordedScanTask:
         self,
         recorded_program: schemas.RecordedProgram,
         existing_db_recorded_video: RecordedVideo | None,
+        is_transcoded_update: bool = False,
     ) -> None:
         """
         録画ファイルのメタデータ解析結果を DB に保存する
@@ -1279,6 +1347,8 @@ class RecordedScanTask:
         Args:
             recorded_program (schemas.RecordedProgram): 保存する録画番組情報
             existing_db_recorded_video (RecordedVideo | None): 既に DB に永続化されている録画ファイルの RecordedVideo レコード
+            is_transcoded_update (bool): 同一動画のトランスコードとして更新するかどうか (デフォルト: False)
+                True の場合、EPG 由来の番組情報は既存レコードの値を保持し、トランスコードで変化しうるフィールドのみを更新する
         """
 
         # トランザクション配下に入れることでパフォーマンスが向上する
@@ -1351,30 +1421,45 @@ class RecordedScanTask:
                 db_recorded_program = RecordedProgram()
 
             # RecordedProgram の属性を設定 (id, created_at, updated_at は自動生成のため指定しない)
-            db_recorded_program.recording_start_margin = recorded_program.recording_start_margin
-            db_recorded_program.recording_end_margin = recorded_program.recording_end_margin
-            db_recorded_program.is_partially_recorded = recorded_program.is_partially_recorded
-            db_recorded_program.channel = db_channel  # type: ignore
-            db_recorded_program.network_id = recorded_program.network_id
-            db_recorded_program.service_id = recorded_program.service_id
-            db_recorded_program.event_id = recorded_program.event_id
-            db_recorded_program.series_id = recorded_program.series_id
-            db_recorded_program.series_broadcast_period_id = recorded_program.series_broadcast_period_id
-            db_recorded_program.title = recorded_program.title
-            db_recorded_program.series_title = recorded_program.series_title
-            db_recorded_program.episode_number = recorded_program.episode_number
-            db_recorded_program.subtitle = recorded_program.subtitle
-            db_recorded_program.description = recorded_program.description
-            db_recorded_program.detail = recorded_program.detail
-            db_recorded_program.start_time = recorded_program.start_time
-            db_recorded_program.end_time = recorded_program.end_time
-            db_recorded_program.duration = recorded_program.duration
-            db_recorded_program.is_free = recorded_program.is_free
-            db_recorded_program.genres = recorded_program.genres
-            db_recorded_program.primary_audio_type = recorded_program.primary_audio_type
-            db_recorded_program.primary_audio_language = recorded_program.primary_audio_language
-            db_recorded_program.secondary_audio_type = recorded_program.secondary_audio_type
-            db_recorded_program.secondary_audio_language = recorded_program.secondary_audio_language
+            if is_transcoded_update is True:
+                # トランスコード更新モード: 同一動画の再エンコードなので、EPG 由来の番組情報は既存の値をそのまま保持する
+                ## トランスコード後のファイルには EPG 情報が残っていないことが多く、解析し直すと番組情報が失われてしまうため
+                ## ここで更新するのは、トランスコードによって実際に変化しうるフィールドのみに限定する
+                db_recorded_program.recording_start_margin = recorded_program.recording_start_margin
+                db_recorded_program.recording_end_margin = recorded_program.recording_end_margin
+                db_recorded_program.is_partially_recorded = recorded_program.is_partially_recorded
+                db_recorded_program.duration = recorded_program.duration  # 再生時間は微小に変化しうる
+                ## 以下のフィールドは既存レコードの値を保持する (更新しない):
+                ## channel / network_id / service_id / event_id / series_id / series_broadcast_period_id /
+                ## title / series_title / episode_number / subtitle / description / detail /
+                ## start_time / end_time / is_free / genres / primary_audio_* / secondary_audio_*
+                logging.debug(f'{recorded_program.recorded_video.file_path}: Transcoded update mode - preserving program metadata.')
+            else:
+                # 通常更新モード: すべてのフィールドを解析結果で更新する
+                db_recorded_program.recording_start_margin = recorded_program.recording_start_margin
+                db_recorded_program.recording_end_margin = recorded_program.recording_end_margin
+                db_recorded_program.is_partially_recorded = recorded_program.is_partially_recorded
+                db_recorded_program.channel = db_channel  # type: ignore
+                db_recorded_program.network_id = recorded_program.network_id
+                db_recorded_program.service_id = recorded_program.service_id
+                db_recorded_program.event_id = recorded_program.event_id
+                db_recorded_program.series_id = recorded_program.series_id
+                db_recorded_program.series_broadcast_period_id = recorded_program.series_broadcast_period_id
+                db_recorded_program.title = recorded_program.title
+                db_recorded_program.series_title = recorded_program.series_title
+                db_recorded_program.episode_number = recorded_program.episode_number
+                db_recorded_program.subtitle = recorded_program.subtitle
+                db_recorded_program.description = recorded_program.description
+                db_recorded_program.detail = recorded_program.detail
+                db_recorded_program.start_time = recorded_program.start_time
+                db_recorded_program.end_time = recorded_program.end_time
+                db_recorded_program.duration = recorded_program.duration
+                db_recorded_program.is_free = recorded_program.is_free
+                db_recorded_program.genres = recorded_program.genres
+                db_recorded_program.primary_audio_type = recorded_program.primary_audio_type
+                db_recorded_program.primary_audio_language = recorded_program.primary_audio_language
+                db_recorded_program.secondary_audio_type = recorded_program.secondary_audio_type
+                db_recorded_program.secondary_audio_language = recorded_program.secondary_audio_language
             await db_recorded_program.save()
 
             # RecordedVideo の保存または更新

@@ -95,7 +95,7 @@ async def VideoHLSPlaylistAPI(
     )
 
     # 仮想 HLS M3U8 プレイリストを取得
-    virtual_playlist = video_stream.getVirtualPlaylist(cache_key)
+    virtual_playlist = await video_stream.getVirtualPlaylist(cache_key)
     return Response(
         content = virtual_playlist,
         media_type = 'application/vnd.apple.mpegurl',
@@ -295,7 +295,7 @@ async def VideoOfflineStreamAPI(
             stream_quality.encoding_options,
             is_new_session_allowed = True,
         )
-        video_stream.getVirtualPlaylist()
+        await video_stream.getVirtualPlaylist()
 
         # Pydantic を通して、クライアントへ渡す JSON の型とフィールドを固定する
         metadata = OfflineVideoStreamMetadata(
