@@ -9,6 +9,7 @@ serve = "python KonomiTV.py"
 dev = "python KonomiTV.py --reload"
 lint = "ruff check --fix . ; pyright"
 typecheck = "pyright"
+test = "python -m unittest discover -s tests -t . -v"
 update-thirdparty = "python -m misc.UpdateThirdparty latest"
 
 [tool.poetry.dependencies]

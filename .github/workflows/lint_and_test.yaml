@@ -1,0 +1,106 @@
+
+name: Lint and Test
+
+# サーバー/クライアントのソースコードに変更があったとき or
+# .github/workflows/lint_and_test.yaml (このファイル) に変更があったとき or 手動実行
+## custom-features ブランチへの push と、custom-features ブランチ宛のプルリクエストの両方で実行する
+on:
+  push:
+    branches:
+      - custom-features
+    paths:
+      - 'server/**'
+      - 'client/**'
+      - '.github/workflows/lint_and_test.yaml'
+  pull_request:
+    branches:
+      - custom-features
+    paths:
+      - 'server/**'
+      - 'client/**'
+      - '.github/workflows/lint_and_test.yaml'
+  workflow_dispatch:
+
+# 同一ブランチで複数実行されたときは、最新の実行だけを残す
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # サーバー (Python) の Lint・型チェック・テスト
+  server:
+    name: Server (Ruff / Pyright / unittest)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: server/
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # server/pyproject.toml で python = ">=3.11,<3.12" を指定しているため 3.11 を使う
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      # .venv を server/ 直下に作らせ、依存関係をキャッシュ可能にする
+      - name: Configure Poetry
+        run: poetry config virtualenvs.in-project true
+
+      - name: Restore Cached Dependencies
+        uses: actions/cache@v4
+        with:
+          path: server/.venv
+          key: ${{ runner.os }}-poetry-${{ hashFiles('server/poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-
+
+      # サードパーティーライブラリ (FFmpeg など) は Lint・型チェック・テストには不要なため取得しない
+      - name: Install Dependencies
+        run: poetry install --no-interaction
+
+      # taskipy の lint タスクは ruff check --fix でファイルを書き換えてしまうため、CI では --fix なしで実行する
+      ## また `ruff ; pyright` と繋がっていて ruff の終了コードが握り潰されるため、ここでは個別に実行する
+      - name: Run Ruff
+        run: poetry run ruff check --no-fix .
+
+      - name: Run Pyright
+        run: poetry run pyright
+
+      - name: Run Tests
+        run: poetry run python -m unittest discover -s tests -t . -v
+
+  # クライアント (TypeScript / Vue) の Lint・型チェック
+  client:
+    name: Client (ESLint / vue-tsc)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: client/
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # client/package.json の engines で node ^20.16.0 を指定している
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.16.0'
+          cache: 'yarn'
+          cache-dependency-path: client/yarn.lock
+
+      # yarn.lock と package.json の整合性も同時に検証する
+      - name: Install Dependencies
+        run: yarn install --frozen-lockfile
+
+      # package.json の lint タスクは eslint --fix でファイルを書き換えてしまうため、CI では --fix なしで実行する
+      - name: Run ESLint
+        run: yarn eslint . --ignore-path .gitignore
+
+      - name: Run Type Check
+        run: yarn typecheck
