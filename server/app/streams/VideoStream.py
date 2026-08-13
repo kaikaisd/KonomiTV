@@ -24,6 +24,7 @@ from app.constants import QUALITY_TYPES
 from app.models.RecordedProgram import RecordedProgram
 from app.models.RecordedVideo import RecordedVideo
 from app.schemas import KeyFrame, SegmentMapEntry
+from app.streams.RecordingPlaybackTracker import RecordingPlaybackTracker
 from app.streams.StreamEncodingOptions import StreamEncodingOptions
 from app.streams.VideoEncodingTask import VideoEncodingTask
 from app.streams.VideoSegmentPlanner import VideoSegmentPlanner
@@ -98,6 +99,10 @@ class VideoStream:
     ## DB 書き込みを HLS セグメントごとに発生させず、再生済み範囲をある程度まとめて保存する
     SEGMENT_MAP_SAVE_BATCH_SIZE: ClassVar[int] = 16
 
+    # 追っかけ再生時に、プレイリスト末尾を書き込み中の位置から何セグメント分手前で止めるか
+    ## 末尾 PCR まで読めても HLS セグメントとして安定して配れる保証はないため、余裕を持たせる
+    RECORDING_PLAYLIST_EDGE_BUFFER_SEGMENTS: ClassVar[int] = 2
+
     # 録画視聴セッションのインスタンスが入る、セッション ID をキーとした辞書
     # この辞書に録画視聴セッションに関する全てのデータが格納されている
     __instances: ClassVar[dict[str, VideoStream]] = {}
@@ -169,6 +174,9 @@ class VideoStream:
             instance._ts_source_base_dts = None
             instance._mp4_keyframe_dts_list = None
             instance._source_position_lock = asyncio.Lock()
+
+            # 録画中ファイルの追っかけ再生に使う共有トラッカー (録画済みファイルでは None のまま)
+            instance._recording_playback_tracker = None
 
             # 現在実行中の VideoEncodingTask のインスタンス
             ## 録画再生時は、シークによりエンコーダーの再起動が必要になる度に、新しい VideoEncodingTask を都度作り直す
@@ -263,6 +271,9 @@ class VideoStream:
         self._ts_source_base_dts: int | None
         self._mp4_keyframe_dts_list: list[int] | None
         self._source_position_lock: asyncio.Lock
+        # 録画中ファイルの読み取り可能範囲を追跡する共有トラッカー
+        ## __getPlaylistDuration() で録画中と判明した時点で取得され、keepAlive() から参照を維持する
+        self._recording_playback_tracker: RecordingPlaybackTracker | None
         self._video_encoding_task: VideoEncodingTask
         self._video_encoding_task_lock: asyncio.Lock
         self._video_encoding_task_ref: asyncio.Task[None] | None
@@ -385,6 +396,10 @@ class VideoStream:
         if self._is_destroyed is True:
             return
 
+        # 録画中ファイルの追跡 worker も、この視聴セッションが生きている限り止めないようにする
+        if self._recording_playback_tracker is not None:
+            self._recording_playback_tracker.touch()
+
         # 前回のタイマーをキャンセルする
         self._cancel_destroy_timer()
 
@@ -415,7 +430,87 @@ class VideoStream:
             return (0, 0)
 
 
-    def getVirtualPlaylist(self, cache_key: str | None = None) -> str:
+    def __ensureVirtualSegments(self, duration_seconds: float, *, is_recording: bool = False) -> None:
+        """
+        指定された再生時間まで HLS 仮想セグメントを作成・更新する
+
+        Args:
+            duration_seconds (float): プレイリストに含める再生時間 (秒)
+            is_recording (bool): 録画中ファイル向けの追っかけ再生プレイリストとして作るかどうか
+        """
+
+        duration_seconds = max(duration_seconds, 0.001)
+
+        # 録画中は末尾セグメントが次回プレイリスト更新で伸び続けると、同じ sequence の EXTINF と実データ長がずれてしまう
+        ## hls.js 側では「TS が繋がっていない」ような周期的な停止に見えやすいため、
+        ## 追っかけ再生では完全に閉じた固定長セグメントだけをプレイリストへ出す
+        if is_recording is True and duration_seconds >= self._segment_duration_seconds:
+            segment_count = max(1, math.floor(duration_seconds / self._segment_duration_seconds))
+            duration_seconds = segment_count * self._segment_duration_seconds
+        else:
+            segment_count = max(1, math.ceil(duration_seconds / self._segment_duration_seconds))
+        previous_segment_count = len(self._segments)
+
+        # 既存セグメントの長さも更新する
+        ## 録画中は最初に短かった末尾セグメントが次のプレイリスト更新時には通常長へ伸びるため、
+        ## セグメントオブジェクト自体は維持しながら EXTINF だけ現在の長さへ合わせる
+        for segment in self._segments[:segment_count]:
+            remaining_duration = duration_seconds - segment.playlist_start_seconds
+            segment.duration_seconds = min(self._segment_duration_seconds, max(remaining_duration, 0.001))
+
+        for segment_sequence in range(previous_segment_count, segment_count):
+            playlist_start_seconds = segment_sequence * self._segment_duration_seconds
+            remaining_duration = duration_seconds - playlist_start_seconds
+            self._segments.append(VideoStreamSegment(
+                sequence_index = segment_sequence,
+                playlist_start_seconds = playlist_start_seconds,
+                source_file_position = None,
+                source_start_dts = None,
+                duration_seconds = min(self._segment_duration_seconds, max(remaining_duration, 0.001)),
+                encode_status = 'Pending',
+                encoded_segment_ts_future = asyncio.Future(),
+            ))
+
+        if len(self._segments) != previous_segment_count:
+            logging.info(
+                f'{self.log_prefix} Total {len(self._segments)} virtual segments '
+                f'(segment_duration: {self._segment_duration_seconds:.6f}s).'
+            )
+
+
+    async def __getPlaylistDuration(self) -> float:
+        """
+        現在のプレイリストに含めるべき再生時間を取得する
+        録画済みファイルでは DB 上の録画時間をそのまま使い、録画中ファイルでは
+        RecordingPlaybackTracker が推定した現時点の読み取り可能範囲まで伸ばす
+
+        Returns:
+            float: プレイリストに含める再生時間 (秒)
+        """
+
+        recorded_video = self.recorded_program.recorded_video
+        playlist_duration_seconds = max(recorded_video.duration, 0.001)
+        if recorded_video.status != 'Recording':
+            return playlist_duration_seconds
+
+        self._recording_playback_tracker = await RecordingPlaybackTracker.getOrCreate(self.recorded_program)
+        snapshot = self._recording_playback_tracker.getSnapshot()
+
+        # トラッカーが既に取得した MPEG-TS のコンテキストは、この視聴セッションのシーク解決にも流用する
+        ## 同じファイルに対して PAT/PMT と先頭 DTS を何度も読み直さず、プレイリスト更新とセグメント要求の I/O を抑える
+        if self._ts_stream_info is None and snapshot.stream_info is not None:
+            self._ts_stream_info = snapshot.stream_info
+        if self._ts_source_base_dts is None and snapshot.source_base_dts is not None:
+            self._ts_source_base_dts = snapshot.source_base_dts
+
+        # トラッカーの推定値は「末尾 PCR までは読めそう」という値であり、HLS セグメントとして安定して配れる境界とは限らない
+        ## 追っかけ再生では末尾を常に数セグメント分遅らせ、書き込み中の末尾へ到達しないようにする
+        recording_playlist_duration_seconds = max(playlist_duration_seconds, snapshot.available_duration_seconds)
+        recording_playlist_edge_buffer_seconds = self._segment_duration_seconds * self.RECORDING_PLAYLIST_EDGE_BUFFER_SEGMENTS
+        return max(recording_playlist_duration_seconds - recording_playlist_edge_buffer_seconds, 0.001)
+
+
+    async def getVirtualPlaylist(self, cache_key: str | None = None) -> str:
         """
         仮想 HLS M3U8 プレイリストを取得する
         返却時点では仮想 HLS M3U8 プレイリストに記載されているセグメントのデータは存在せず (「仮想」のゆえん)、随時エンコードされる
@@ -430,27 +525,10 @@ class VideoStream:
         # セッションのアクティブ状態を維持する
         self.keepAlive()
 
-        # まだ HLS セグメントリストが空なら、録画時間とフレームレートから仮想セグメントを作成する
-        if len(self._segments) == 0:
-            segment_count = max(1, math.ceil(self.recorded_program.recorded_video.duration / self._segment_duration_seconds))
-            for segment_sequence in range(segment_count):
-                playlist_start_seconds = segment_sequence * self._segment_duration_seconds
-                remaining_duration = self.recorded_program.recorded_video.duration - playlist_start_seconds
-                duration_seconds = min(self._segment_duration_seconds, max(remaining_duration, 0.001))
-                self._segments.append(VideoStreamSegment(
-                    sequence_index = segment_sequence,
-                    playlist_start_seconds = playlist_start_seconds,
-                    source_file_position = None,
-                    source_start_dts = None,
-                    duration_seconds = duration_seconds,
-                    encode_status = 'Pending',
-                    encoded_segment_ts_future = asyncio.Future(),
-                ))
-
-            logging.info(
-                f'{self.log_prefix} Total {len(self._segments)} virtual segments '
-                f'(segment_duration: {self._segment_duration_seconds:.6f}s).'
-            )
+        # 録画済みは DB の録画時間から固定長プレイリストを作り、録画中はトラッカーが推定した読み取り可能範囲まで随時伸ばす
+        playlist_duration_seconds = await self.__getPlaylistDuration()
+        is_recording = self.recorded_program.recorded_video.status == 'Recording'
+        self.__ensureVirtualSegments(playlist_duration_seconds, is_recording = is_recording)
 
         # キャッシュキーが指定されていない場合は UUID の - で区切って一番左側のみを使う
         if cache_key is None:
@@ -460,7 +538,9 @@ class VideoStream:
         virtual_playlist = ''
         virtual_playlist += '#EXTM3U\n'
         virtual_playlist += '#EXT-X-VERSION:6\n'
-        virtual_playlist += '#EXT-X-PLAYLIST-TYPE:VOD\n'
+        # 録画中は今後もセグメントが追加されるため EVENT として配信する
+        virtual_playlist += '#EXT-X-PLAYLIST-TYPE:EVENT\n' if is_recording is True else '#EXT-X-PLAYLIST-TYPE:VOD\n'
+        virtual_playlist += '#EXT-X-MEDIA-SEQUENCE:0\n'
 
         # HLS セグメントの実時間の最大値を指定する (小数点以下は切り上げ)
         target_duration = max(s.duration_seconds for s in self._segments)
@@ -473,7 +553,10 @@ class VideoStream:
             # キャッシュ避けのためにキャッシュキーを付与する
             virtual_playlist += f'segment?session_id={self.session_id}&sequence={segment.sequence_index}&cache_key={cache_key}\n'
 
-        virtual_playlist += '#EXT-X-ENDLIST\n'
+        # 録画中は再生終端が確定していないため ENDLIST を付けない
+        ## ENDLIST を付けるとプレイヤー側が VOD として扱い、追加セグメントを取りに来なくなる
+        if is_recording is False:
+            virtual_playlist += '#EXT-X-ENDLIST\n'
         return virtual_playlist
 
 
