@@ -19,14 +19,12 @@ from app.config import Config
 from app.constants import JST, THUMBNAILS_DIR
 from app.metadata.CMSectionsDetector import CMSectionsDetector
 from app.metadata.MetadataAnalyzer import MetadataAnalyzer
+from app.metadata.SeriesIndexer import SeriesIndexer
 from app.metadata.ThumbnailGenerator import ThumbnailGenerator
-from app.metadata.TitleParser import TitleParser, TitleParseResult
 from app.models.Channel import Channel
 from app.models.EncodingTask import EncodingTask
 from app.models.RecordedProgram import RecordedProgram
 from app.models.RecordedVideo import RecordedVideo
-from app.models.Series import Series
-from app.models.SeriesBroadcastPeriod import SeriesBroadcastPeriod
 from app.streams.VideoSegmentPlanner import VideoSegmentPlanner
 from app.utils import ShutdownProcessPoolExecutor
 from app.utils.DriveIOLimiter import DriveIOLimiter
@@ -520,8 +518,8 @@ class RecordedScanTask:
                 f'Re-run metadata analysis after checking source files.',
             )
         # シリーズ未割り当ての既存録画番組に対して、タイトル解析 → シリーズ割り当てを一括実行する
-        # サーバー起動時の一括スキャン完了後に実行されるため、初回起動時や TitleParser 更新後にも対応できる
-        await self.__batchAssignSeries()
+        # サーバー起動時の一括スキャン完了後に実行されるため、初回起動時や SeriesIndexer 更新後にも対応できる
+        await SeriesIndexer.rebuild()
 
         logging.info('Batch scan of recording folders has been completed.')
         self._is_batch_scan_running = False
@@ -993,15 +991,6 @@ class RecordedScanTask:
                     # MetadataAnalyzer 側で既に Recorded に設定されているが、念のため
                     recorded_program.recorded_video.status = 'Recorded'
 
-                # タイトル解析: 番組タイトルからシリーズ名・話数・サブタイトルを抽出する
-                parse_result = TitleParser.parse(recorded_program.title)
-                if parse_result.series_title is not None:
-                    recorded_program.series_title = parse_result.series_title
-                    recorded_program.episode_number = parse_result.episode_number
-                    recorded_program.subtitle = parse_result.subtitle
-                    # シリーズ情報の取得または作成を行い、recorded_program に series_id / series_broadcast_period_id をセットする
-                    await self.__assignSeries(recorded_program)
-
                 # DB に永続化
                 # メタデータ解析後の最新のデータベース情報を使う
                 await self.__saveRecordedMetadataToDB(
@@ -1207,278 +1196,6 @@ class RecordedScanTask:
 
 
     @staticmethod
-    async def __assignSeries(
-        recorded_program: schemas.RecordedProgram,
-    ) -> None:
-        """
-        タイトル解析結果に基づき、対応する Series / SeriesBroadcastPeriod レコードを
-        取得または作成し、recorded_program に series_id / series_broadcast_period_id をセットする
-
-        この処理は __saveRecordedMetadataToDB() の前に呼ばれ、recorded_program の
-        series_title が事前にセットされていることを前提とする。
-
-        処理フロー:
-            1. series_title が None の場合はスキップ
-            2. 既存の Series レコードを series_title で完全一致検索
-            3. 完全一致で見つからない場合、既存シリーズの中から類似タイトル (前方一致) を検索し、
-               TitleParser の類似タイトル判定ロジックに基づいてマージ先を決定する
-            4. シリーズが見つからなければ新規作成
-            5. 既存の SeriesBroadcastPeriod を series_id + channel_id で検索し、なければ新規作成
-            6. recorded_program に series_id と series_broadcast_period_id をセット
-
-        Args:
-            recorded_program: シリーズ情報をセットする対象の録画番組情報
-        """
-
-        # series_title が未設定の場合はシリーズ割り当てをスキップする
-        if recorded_program.series_title is None:
-            return
-
-        # チャンネル情報がない場合は SeriesBroadcastPeriod の作成に必要な情報が不足するためスキップする
-        if recorded_program.channel is None:
-            return
-
-        try:
-            # まず完全一致で既存シリーズを検索する
-            db_series = await Series.get_or_none(title=recorded_program.series_title)
-
-            if db_series is None:
-                # 完全一致で見つからなかった場合、既存シリーズの中から類似タイトルを検索する
-                # 現在のシリーズタイトルで始まる既存シリーズ、または現在のシリーズタイトルの前方部分に
-                # 一致する既存シリーズを探す
-                all_existing_titles = cast(
-                    list[str], await Series.all().values_list('title', flat=True)
-                )
-                # 既存タイトルに現在のタイトルを加えてマッピングを構築する
-                all_titles_for_mapping = [*all_existing_titles, recorded_program.series_title]
-                merge_map = TitleParser.buildSimilarTitleMapping(all_titles_for_mapping)
-
-                # マッピングに現在のタイトルが含まれている場合、マージ先のシリーズを使用する
-                if recorded_program.series_title in merge_map:
-                    merged_title = merge_map[recorded_program.series_title]
-                    db_series = await Series.get_or_none(title=merged_title)
-                    if db_series is not None:
-                        # マージ先のシリーズが見つかった場合、series_title もマージ先に更新する
-                        recorded_program.series_title = merged_title
-                        logging.info(
-                            f'Merged series title: "{recorded_program.title}" -> "{merged_title}" '
-                            f'(series_id: {db_series.id})'
-                        )
-
-            if db_series is None:
-                # 完全一致でも類似タイトルでも見つからなかった場合は新規作成する
-                # description と genres は最初に登録されるエピソードの情報を流用する
-                db_series = Series()
-                db_series.title = recorded_program.series_title
-                db_series.description = recorded_program.description
-                db_series.genres = recorded_program.genres
-                await db_series.save()
-                logging.info(f'Created new series: "{db_series.title}" (id: {db_series.id})')
-
-            # 同一シリーズ・同一チャンネルの既存放送期間を検索する
-            # 1つのシリーズが同じチャンネルで複数回放送される場合（再放送など）、放送日付の範囲で判定する
-            broadcast_date = recorded_program.start_time.date()
-            db_broadcast_period = await SeriesBroadcastPeriod.get_or_none(
-                series_id=db_series.id,
-                channel_id=recorded_program.channel.id,
-            )
-
-            if db_broadcast_period is not None:
-                # 既存の放送期間が見つかった場合、日付範囲を更新する
-                # start_date をより早い日付に、end_date をより遅い日付に拡大する
-                if broadcast_date < db_broadcast_period.start_date:
-                    db_broadcast_period.start_date = broadcast_date
-                if broadcast_date > db_broadcast_period.end_date:
-                    db_broadcast_period.end_date = broadcast_date
-                await db_broadcast_period.save()
-            else:
-                # 既存の放送期間が見つからなかった場合は新規作成する
-                db_broadcast_period = SeriesBroadcastPeriod()
-                db_broadcast_period.series_id = db_series.id
-                db_broadcast_period.channel_id = recorded_program.channel.id
-                db_broadcast_period.start_date = broadcast_date
-                db_broadcast_period.end_date = broadcast_date
-                await db_broadcast_period.save()
-                logging.info(
-                    f'Created new broadcast period for series "{db_series.title}" '
-                    f'on channel "{recorded_program.channel.name}" (id: {db_broadcast_period.id})'
-                )
-
-            # recorded_program にシリーズ情報をセットする
-            # この情報は後続の __saveRecordedMetadataToDB() で DB に永続化される
-            recorded_program.series_id = db_series.id
-            recorded_program.series_broadcast_period_id = db_broadcast_period.id
-
-        except Exception as ex:
-            # シリーズ割り当てに失敗しても録画番組の保存自体には影響しないため、
-            # エラーをログに記録してスキップする
-            logging.warning(f'Failed to assign series for "{recorded_program.title}":', exc_info=ex)
-
-    @staticmethod
-    async def __batchAssignSeries() -> None:
-        """
-        全録画番組に対して、タイトル解析 → 類似タイトルマージ → シリーズ割り当てを一括実行する
-
-        サーバー起動時の一括スキャン (runBatchScan()) 完了後に呼ばれ、
-        手動編集されていない録画番組のシリーズ情報をリセットした上で、
-        TitleParser でタイトルを解析し、Series / SeriesBroadcastPeriod レコードの
-        作成と紐付けを行う。
-
-        手動編集済み (is_series_manually_edited=True) の録画番組は保護され、
-        自動再割り当ての対象外になる。これにより、ユーザーが手動で修正したシリーズ割り当てが
-        サーバー再起動時にリセットされることを防ぐ。
-
-        処理フロー:
-            1. 手動編集されていない録画番組のタイトルを TitleParser で解析し、series_title を抽出
-            2. 全ユニークな series_title に対して類似タイトルのマッピングを構築
-               (前方一致で短いタイトルが長いタイトルに含まれる場合にマージ)
-            3. マージ済みの series_title で Series / SeriesBroadcastPeriod を作成・紐付け
-
-        毎回リビルドすることで、TitleParser のロジック変更が即座に反映される。
-        """
-
-        # 手動編集されていない録画番組のみを取得する
-        # 手動編集済みの番組はシリーズ割り当てを保持するためスキップする
-        auto_programs = await RecordedProgram.filter(is_series_manually_edited=False) \
-            .select_related('channel') \
-            .order_by('start_time')
-
-        # 手動編集済みの番組が参照しているシリーズ / 放送期間の ID を収集する
-        # これらのレコードは削除から保護する必要がある
-        manually_referenced_series_ids: list[int] = await RecordedProgram.filter(
-            is_series_manually_edited=True, series_id__isnull=False,
-        ).values_list('series_id', flat=True)  # type: ignore
-        manually_referenced_period_ids: list[int] = await RecordedProgram.filter(
-            is_series_manually_edited=True, series_broadcast_period_id__isnull=False,
-        ).values_list('series_broadcast_period_id', flat=True)  # type: ignore
-
-        if len(auto_programs) == 0 and len(manually_referenced_series_ids) == 0:
-            logging.info('No recorded programs found. Skipping batch series assignment.')
-            return
-
-        # 手動編集されていない RecordedProgram のシリーズ情報をリセットする
-        # 手動編集済みの番組が参照する Series / SeriesBroadcastPeriod は保持し、
-        # どこからも参照されなくなったものだけ削除する
-        logging.info(f'Resetting series assignments for {len(auto_programs)} auto-assigned programs '
-                     f'(preserving {len(manually_referenced_series_ids)} manually edited references)...')
-        await RecordedProgram.filter(is_series_manually_edited=False).update(
-            series_id=None,
-            series_broadcast_period_id=None,
-            series_title=None,
-            episode_number=None,
-            subtitle=None,
-        )
-        # 手動編集済みの番組からまだ参照されている Series / SeriesBroadcastPeriod は保持する
-        if len(manually_referenced_period_ids) > 0:
-            await SeriesBroadcastPeriod.filter(id__not_in=manually_referenced_period_ids).delete()
-        else:
-            await SeriesBroadcastPeriod.all().delete()
-        if len(manually_referenced_series_ids) > 0:
-            await Series.filter(id__not_in=manually_referenced_series_ids).delete()
-        else:
-            await Series.all().delete()
-
-        if len(auto_programs) == 0:
-            logging.info('No auto-assigned programs to process. Skipping batch series assignment.')
-            return
-
-        # フェーズ1: 手動編集されていない録画番組のタイトルを解析し、series_title を抽出する
-        # 各番組の解析結果を保持しておき、後続のフェーズ2で類似タイトルマージ後に使用する
-        logging.info(f'Phase 1: Parsing titles for {len(auto_programs)} recorded programs...')
-        parsed_results: list[tuple[RecordedProgram, TitleParseResult]] = []
-        unique_series_titles: list[str] = []
-        seen_titles: set[str] = set()
-
-        for db_program in auto_programs:
-            parse_result = TitleParser.parse(db_program.title)
-            parsed_results.append((db_program, parse_result))
-            # ユニークな series_title を収集する (類似タイトルマッピング構築用)
-            if parse_result.series_title is not None and parse_result.series_title not in seen_titles:
-                unique_series_titles.append(parse_result.series_title)
-                seen_titles.add(parse_result.series_title)
-
-        # フェーズ2: 類似タイトルのマッピングを構築する
-        # 前方一致で短いタイトルが長いタイトルに含まれる場合、長いタイトルを短いタイトルにマージする
-        # 例: 「番組A 特別編」→「番組A」にマージ (ただし「ニュース7」は「ニュース」にマージされない)
-        logging.info(f'Phase 2: Building similar title mapping for {len(unique_series_titles)} unique titles...')
-        merge_map = TitleParser.buildSimilarTitleMapping(unique_series_titles)
-        if len(merge_map) > 0:
-            logging.info(f'Found {len(merge_map)} similar title pairs to merge.')
-            for long_title, short_title in merge_map.items():
-                logging.info(f'  Merge: "{long_title}" -> "{short_title}"')
-
-        # フェーズ3: マージ済みの series_title で Series / SeriesBroadcastPeriod を作成・紐付けする
-        logging.info(f'Phase 3: Assigning series for {len(auto_programs)} recorded programs...')
-        assigned_count = 0
-
-        for index, (db_program, parse_result) in enumerate(parsed_results):
-            try:
-                if parse_result.series_title is None:
-                    continue
-
-                # 類似タイトルマッピングを適用する
-                # マッピングに存在する場合はマージ先の短いタイトルを使用する
-                effective_series_title = merge_map.get(parse_result.series_title, parse_result.series_title)
-
-                # タイトル解析結果を DB レコードに反映する
-                db_program.series_title = effective_series_title
-                db_program.episode_number = parse_result.episode_number
-                db_program.subtitle = parse_result.subtitle
-
-                # チャンネル情報がない場合は SeriesBroadcastPeriod の作成に必要な情報が不足するためスキップする
-                if db_program.channel is None:
-                    await db_program.save()
-                    continue
-
-                # 同一タイトルの既存シリーズを検索する
-                db_series = await Series.get_or_none(title=effective_series_title)
-                if db_series is None:
-                    # 既存シリーズが見つからなかった場合は新規作成する
-                    db_series = Series()
-                    db_series.title = effective_series_title
-                    db_series.description = db_program.description
-                    db_series.genres = db_program.genres
-                    await db_series.save()
-
-                # 同一シリーズ・同一チャンネルの既存放送期間を検索する
-                broadcast_date = db_program.start_time.date()
-                db_broadcast_period = await SeriesBroadcastPeriod.get_or_none(
-                    series_id=db_series.id,
-                    channel_id=db_program.channel.id,
-                )
-
-                if db_broadcast_period is not None:
-                    # 既存の放送期間が見つかった場合、日付範囲を更新する
-                    if broadcast_date < db_broadcast_period.start_date:
-                        db_broadcast_period.start_date = broadcast_date
-                    if broadcast_date > db_broadcast_period.end_date:
-                        db_broadcast_period.end_date = broadcast_date
-                    await db_broadcast_period.save()
-                else:
-                    # 既存の放送期間が見つからなかった場合は新規作成する
-                    db_broadcast_period = SeriesBroadcastPeriod()
-                    db_broadcast_period.series_id = db_series.id
-                    db_broadcast_period.channel_id = db_program.channel.id
-                    db_broadcast_period.start_date = broadcast_date
-                    db_broadcast_period.end_date = broadcast_date
-                    await db_broadcast_period.save()
-
-                # RecordedProgram にシリーズ情報をセットして保存する
-                db_program.series_id = db_series.id
-                db_program.series_broadcast_period_id = db_broadcast_period.id
-                await db_program.save()
-                assigned_count += 1
-
-            except Exception as ex:
-                logging.warning(f'Failed to assign series for "{db_program.title}":', exc_info=ex)
-
-            # イベントループが他のタスクを処理できるよう定期的に制御を返す
-            if (index + 1) % 50 == 0:
-                await asyncio.sleep(0)
-
-        logging.info(f'Batch series assignment completed. {assigned_count} programs were assigned to series.')
-
-    @staticmethod
     def __populateChannelModelFromSchema(db_channel: Channel, channel_schema: schemas.Channel) -> None:
         """
         Pydantic スキーマから Channel モデルへ属性を転写する
@@ -1633,6 +1350,12 @@ class RecordedScanTask:
                 db_recorded_program.secondary_audio_type = recorded_program.secondary_audio_type
                 db_recorded_program.secondary_audio_language = recorded_program.secondary_audio_language
             await db_recorded_program.save()
+
+            # 通常解析で得た番組タイトルから Series を確定できる場合は、録画保存と同じ処理内で関連付ける
+            ## SeriesIndexer.linkRecordedProgram() は DB 保存済みのレコードを前提とするため、必ず save() の後に呼び出す
+            ## トランスコード更新時は既存の番組情報をそのまま保持するため、関連付けもやり直さない
+            if is_transcoded_update is False:
+                await SeriesIndexer.linkRecordedProgram(db_recorded_program)
 
             # RecordedVideo の保存または更新
             if existing_db_recorded_video is not None:
