@@ -29,6 +29,19 @@
                                 height="5" />
                         </div>
                     </div>
+                    <!-- 追っかけ再生 (録画中の番組があるときのみ表示) -->
+                    <RecordedProgramList
+                        v-if="recording_programs.length > 0"
+                        class="videos-home-container__recording-programs"
+                        title="追っかけ再生"
+                        :programs="recording_programs"
+                        :total="total_recording_programs"
+                        :hideSort="true"
+                        :hidePagination="true"
+                        :showMoreButton="true"
+                        :isLoading="is_loading"
+                        :showEmptyMessage="false"
+                        @more="$router.push('/videos/recording')" />
                     <RecordedProgramList
                         class="videos-home-container__recent-programs"
                         :class="{'videos-home-container__recent-programs--loading': recent_programs.length === 0 && is_loading}"
@@ -138,7 +151,7 @@ import Navigation from '@/components/Navigation.vue';
 import SPHeaderBar from '@/components/SPHeaderBar.vue';
 import RecordedProgramList from '@/components/Videos/RecordedProgramList.vue';
 import SeriesService, { ISeries } from '@/services/Series';
-import { IRecordedProgram, IStorageInfo } from '@/services/Videos';
+import { IRecordedProgram, IStorageInfo, isChasePlaybackProgram } from '@/services/Videos';
 import Videos from '@/services/Videos';
 import useSettingsStore from '@/stores/SettingsStore';
 import useUserStore from '@/stores/UserStore';
@@ -176,6 +189,10 @@ const total_mylist_programs = ref(0);
 const watched_programs = ref<IRecordedProgram[]>([]);
 const total_watched_programs = ref(0);
 
+// 追っかけ再生できる録画中番組のリスト
+const recording_programs = ref<IRecordedProgram[]>([]);
+const total_recording_programs = ref(0);
+
 const is_loading = ref(true);
 
 // 自動更新用の interval ID を保持
@@ -203,6 +220,17 @@ const fetchRecentPrograms = async () => {
     if (result) {
         recent_programs.value = result.recorded_programs.slice(0, 10);  // 最新10件のみ表示
         total_programs.value = result.total;
+    }
+};
+
+// 追っかけ再生できる録画中番組を取得
+const fetchRecordingPrograms = async () => {
+    // 録画中の番組のみをサーバー側で絞り込んで取得する (総数も録画中のものだけの正確な件数になる)
+    const result = await Videos.fetchVideos('desc', 1, null, null, null, 'Recording');
+    if (result) {
+        // 録画終了時刻を大きく過ぎても status が Recording のまま残っている録画は、追っかけ再生できないため除外する
+        recording_programs.value = result.recorded_programs.filter(isChasePlaybackProgram).slice(0, 10);  // 最新10件のみ表示
+        total_recording_programs.value = result.total;
     }
 };
 
@@ -282,6 +310,7 @@ const fetchWatchedPrograms = async () => {
 
 // 各セクションの更新関数を管理するオブジェクト
 const sectionUpdaters = {
+    recordingPrograms: fetchRecordingPrograms,
     recentPrograms: fetchRecentPrograms,
     recentSeries: fetchRecentSeries,
     mylistPrograms: fetchMylistPrograms,
@@ -290,6 +319,8 @@ const sectionUpdaters = {
 
 // 現在表示中のいずれかの番組がバックグラウンド解析中かどうかを返す
 // thumbnail_info が null かつ AnalysisFailed でない場合、サムネイル生成などのバックグラウンド解析がまだ完了していない
+// なお録画中の番組は録画が終わるまでサムネイルが生成されないため、ここには意図的に含めていない
+// 含めてしまうと、録画が続いている間ずっと短い間隔でのポーリングが解除されなくなる
 const hasAnalyzingPrograms = () => {
     const allPrograms = [
         ...recent_programs.value,
