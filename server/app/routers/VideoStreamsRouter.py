@@ -11,6 +11,11 @@ from sse_starlette.sse import EventSourceResponse
 from starlette.background import BackgroundTask
 
 from app import logging
+from app.metadata.RecordedScanTask import (
+    RecordedFileMetadataNotStableError,
+    RecordedFileMetadataRefreshError,
+    RecordedScanTask,
+)
 from app.models.RecordedProgram import RecordedProgram
 from app.schemas import OfflineVideoStreamMetadata
 from app.streams.StreamEncodingOptions import (
@@ -43,6 +48,42 @@ async def ValidateVideoID(video_id: Annotated[int, Path(description='録画番�
             status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail = 'Specified video_id was not found',
         )
+
+    # 詳細 API を経由せずストリームへ直接アクセスした場合も、古いコーデック情報でセッションを生成しないよう同期する
+    ## 同じファイルへの並行リクエストは RecordedScanTask 側で 1 個の再解析タスクへ合流する
+    try:
+        is_refreshed = await RecordedScanTask().refreshRecordedFileMetadataIfNeeded(recorded_program.recorded_video)
+    except RecordedFileMetadataNotStableError as ex:
+        logging.warning(
+            f'[VideoStreamsRouter][ValidateVideoID] Recorded file is still being updated. [video_id: {video_id}]'
+        )
+        raise HTTPException(
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail = 'Recorded video file is still being updated. Please retry shortly.',
+            headers = {'Retry-After': str(RecordedScanTask.RECORDING_COMPLETE_SECONDS)},
+        ) from ex
+    except RecordedFileMetadataRefreshError as ex:
+        logging.error(
+            f'[VideoStreamsRouter][ValidateVideoID] Failed to refresh recorded file metadata. [video_id: {video_id}]',
+            exc_info = ex,
+        )
+        raise HTTPException(
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail = 'Failed to refresh recorded video metadata. Please retry shortly.',
+            headers = {'Retry-After': '5'},
+        ) from ex
+
+    # 再解析後の ORM インスタンスを返し、新しく生成される VideoStream が必ず最新の技術情報を保持するようにする
+    if is_refreshed is True:
+        refreshed_recorded_program = await RecordedProgram.filter(id=video_id).get_or_none() \
+            .select_related('recorded_video') \
+            .select_related('channel')
+        if refreshed_recorded_program is None:
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'Specified video_id was not found after metadata refresh',
+            )
+        recorded_program = refreshed_recorded_program
 
     return recorded_program
 

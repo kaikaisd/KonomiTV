@@ -1,7 +1,7 @@
 
 import APIClient from  '@/services/APIClient';
 import { IChannel } from '@/services/Channels';
-import { CommentUtils } from '@/utils';
+import { CommentUtils, dayjs } from '@/utils';
 
 /** ソート順序を表す型 */
 export type SortOrder = 'desc' | 'asc';
@@ -164,6 +164,29 @@ export const IRecordedProgramDefault: IRecordedProgram = {
     updated_at: '2000-01-01T00:00:00+09:00',
 };
 
+/**
+ * 録画が終了しているはずの時刻を過ぎても status が Recording のまま残っている録画を、
+ * 追っかけ再生の対象から外すための猶予時間 (ミリ秒)
+ * 録画プロセスが異常終了した場合などに status が更新されないまま残ることがあるため
+ */
+const CHASE_PLAYBACK_STALE_GRACE_MS = 5 * 60 * 1000;
+
+/**
+ * 指定された録画番組が追っかけ再生の対象かどうかを判定する
+ * @param program 判定対象の録画番組
+ * @returns 追っかけ再生の対象なら true
+ */
+export const isChasePlaybackProgram = (program: IRecordedProgram): boolean => {
+    if (program.recorded_video.status !== 'Recording') {
+        return false;
+    }
+    const end_time = dayjs(program.end_time);
+    if (end_time.isValid() === false) {
+        return true;
+    }
+    return end_time.valueOf() + CHASE_PLAYBACK_STALE_GRACE_MS >= dayjs().valueOf();
+};
+
 /** 1つの録画 TS ファイルに多重化されている、選択可能なチャンネル情報を表すインターフェース */
 export interface IRecordedVideoAvailableChannel {
     service_id: number;
@@ -224,10 +247,12 @@ class Videos {
      * @param ids 録画番組の ID のリスト
      * @param channel_id チャンネル ID (指定時は同一チャンネルの録画番組に絞り込む)
      * @param genre ジャンル名 (指定時は指定されたジャンルを含む録画番組に絞り込む)
+     * @param status 録画ファイルの状態 (指定時はその状態の録画番組のみを返す)
      * @returns 録画番組一覧情報 or 録画番組一覧情報の取得に失敗した場合は null
      */
     static async fetchVideos(order: 'desc' | 'asc' | 'ids' = 'desc', page: number = 1, ids: number[] | null = null,
-        channel_id: string | null = null, genre: string | null = null): Promise<IRecordedPrograms | null> {
+        channel_id: string | null = null, genre: string | null = null,
+        status: IRecordedVideo['status'] | null = null): Promise<IRecordedPrograms | null> {
 
         // API リクエストを実行
         const response = await APIClient.get<IRecordedPrograms>('/videos', {
@@ -237,6 +262,7 @@ class Videos {
                 ids,
                 channel_id,
                 genre,
+                status,
             },
             // 録画番組の ID のリストを FastAPI が受け付ける &ids=1&ids=2&ids=3&... の形式にエンコードする
             // ref: https://github.com/axios/axios/issues/5058#issuecomment-1272107602

@@ -252,6 +252,12 @@ class PlayerController {
         const is_show_superimpose = this.playback_mode === 'Live' ?
             settings_store.settings.tv_show_superimpose : settings_store.settings.video_show_superimpose;
 
+        // 録画中の録画番組を再生しているかどうか (追っかけ再生)
+        // 通常の録画番組と同じ Video モードで再生するが、HLS プレイリストは録画ファイルの伸長に合わせて更新される
+        // 末尾でループ再生すると 0 秒へ戻ってしまうため、追っかけ再生中だけはループ機能を強制的に無効化する
+        const is_recording_chase_playback = this.playback_mode === 'Video' &&
+            player_store.recorded_program.recorded_video.status === 'Recording';
+
         // シーク秒数が指定されていない（初回ロード時）は、視聴履歴があればその位置から再生を開始する
         // なければ録画開始マージン + 2秒シークする
         // 2秒プラスしているのは、実際の放送波では EPG (EIT[p/f]) の変更より2〜4秒後に実際に番組が切り替わる場合が多いため
@@ -328,8 +334,8 @@ class PlayerController {
             live: this.playback_mode === 'Live' ? true : false,
             // ライブモードで同期する際の最小バッファサイズ
             liveSyncMinBufferSize: this.live_playback_buffer_seconds - 0.1,
-            // ループ再生 (ライブ視聴では無効)
-            loop: this.playback_mode === 'Live' ? false : true,
+            // ループ再生 (ライブ視聴と追っかけ再生では無効)
+            loop: (this.playback_mode === 'Live' || is_recording_chase_playback === true) ? false : true,
             // 自動再生
             autoplay: true,
             // AirPlay 機能 (うまく動かないため無効化)
@@ -666,6 +672,15 @@ class PlayerController {
                     // startPosition に視聴履歴などから求めた再生位置を渡し、ロード開始時点で正しい Media Sequence を選択させる
                     // これを指定しないと manifest 解析後に sequence=0 からフラグメント取得が始まってしまう
                     startPosition: seek_seconds,
+                    // 追っかけ再生は EVENT playlist を使うが、視聴位置はユーザーの再生位置・視聴履歴を優先する
+                    // liveSyncDurationCount / liveMaxLatencyDurationCount を低遅延ライブ向けに詰めると、
+                    // manifest 更新時に hls.js が「大きく遅延している」と判定し、現在位置から録画末尾へ飛んでしまう
+                    // そのため追っかけ再生中は明示的に live edge への自動追跡を無効化し、末尾付近の manifest 再読込だけ CustomBufferController に任せる
+                    liveSyncDurationCount: Hls.DefaultConfig.liveSyncDurationCount,
+                    liveMaxLatencyDurationCount: is_recording_chase_playback === true ?
+                        Number.POSITIVE_INFINITY : Hls.DefaultConfig.liveMaxLatencyDurationCount,
+                    maxLiveSyncPlaybackRate: is_recording_chase_playback === true ?
+                        1 : Hls.DefaultConfig.maxLiveSyncPlaybackRate,
                     // 通常再生ではサーバー側のエンコード済み範囲と連携し、保存再生では完結した HLS を標準実装で扱う
                     // 保存版には buffer.m3u8 の SSE がないため、CustomBufferController を使うとシーク時に存在しない URL へ接続してしまう
                     // @ts-ignore
@@ -799,6 +814,27 @@ class PlayerController {
 
         // デバッグ用にプレイヤーインスタンスも window 直下に入れる
         (window as any).player = this.player;
+
+        // 録画中の追っかけ再生では、DPlayer に永続化された loop 設定も含めて強制的に無効化する
+        // DPlayer は options.loop より LocalStorage の dplayer-loop を優先するため、ここで内部状態と UI を明示的に揃える
+        if (is_recording_chase_playback === true) {
+            const dplayer_internal = this.player as unknown as {
+                setting: { loop: boolean };
+                template: {
+                    loop: HTMLElement;
+                    loopToggle: HTMLInputElement;
+                };
+            };
+            // HTMLVideoElement 側の loop を落とすことで、DPlayer の内部状態に関わらず末尾での巻き戻しを確実に防ぐ
+            this.player.video.loop = false;
+            dplayer_internal.setting.loop = false;
+            // 追っかけ再生中は機能しない設定項目を触らせないよう、UI 上もトグルを非表示にする
+            dplayer_internal.template.loopToggle.checked = false;
+            dplayer_internal.template.loop.style.display = 'none';
+            // なお user.set('loop', 0) は意図的に呼ばない
+            // これを呼ぶと LocalStorage の dplayer-loop まで書き換わり、通常の録画番組の再生でも
+            // ユーザーが設定したループ再生が無効のままになってしまうため
+        }
 
         // この時点で DPlayer のコンテナ要素に dplayer-mobile クラスが付与されている場合、
         // DPlayer は音量コントロールがないスマホ向けの UI になっている
