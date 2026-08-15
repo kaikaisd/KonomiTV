@@ -67,6 +67,14 @@ class RecordedVideoSummary:
     file_hash: str
 
 
+class RecordedFileMetadataNotStableError(Exception):
+    """録画ファイルが更新中で、安全にメタデータを再解析できないことを表す例外。"""
+
+
+class RecordedFileMetadataRefreshError(Exception):
+    """録画ファイルのメタデータ再解析が完了しなかったことを表す例外。"""
+
+
 class RecordedScanTask:
     """
     録画フォルダの監視とメタデータの DB への同期を行うタスク
@@ -154,6 +162,13 @@ class RecordedScanTask:
 
         # バックグラウンドタスクの状態管理
         self._background_tasks: dict[anyio.Path, asyncio.Task[None]] = {}
+
+        # 再生開始前のファイルメタデータ再解析タスクを、ファイルパスごとに共有する
+        ## 参照箇所: refreshRecordedFileMetadataIfNeeded() / __handleMetadataRefreshTaskDone()
+        ## 前提条件: 同じ録画への複数リクエストが重なっても、重い解析処理は常に 1 回だけ実行する
+        self._metadata_refresh_tasks: dict[anyio.Path, asyncio.Task[None]] = {}
+        # _metadata_refresh_tasks 辞書自体へのアクセスを保護するためのロック
+        self._metadata_refresh_tasks_lock = asyncio.Lock()
 
         # シンボリックリンクの元パスと実体パスのマッピング
         self._symlink_path_map: dict[str, str] = {}
@@ -510,6 +525,163 @@ class RecordedScanTask:
 
         logging.info('Batch scan of recording folders has been completed.')
         self._is_batch_scan_running = False
+
+
+    async def refreshRecordedFileMetadataIfNeeded(self, recorded_video: RecordedVideo) -> bool:
+        """
+        録画済みファイルの実体が DB 上のファイル情報から変化している場合、安全にメタデータを再解析する。
+        外部のトランスコードツールなどが録画ファイルを差し替えた場合に、古いメタデータのまま再生を開始してしまうのを防ぐ。
+
+        Args:
+            recorded_video (RecordedVideo): 再生または詳細取得の対象となる録画ファイル情報。
+
+        Returns:
+            bool: ファイル情報に差分があり、共有再解析タスクの完了を待った場合は True。
+
+        Raises:
+            RecordedFileMetadataNotStableError: ファイルがまだ外部プロセスから更新されている可能性がある場合。
+            RecordedFileMetadataRefreshError: ファイルの確認またはメタデータ再解析が完了しなかった場合。
+        """
+
+        # 録画中ファイルは意図的にサイズが増え続けるため、追っかけ再生の経路では差分検出を行わない
+        if recorded_video.status == 'Recording':
+            return False
+
+        file_path = anyio.Path(recorded_video.file_path)
+        try:
+            stat = await file_path.stat()
+        except (FileNotFoundError, OSError) as ex:
+            raise RecordedFileMetadataRefreshError(f'Failed to stat recorded file: {file_path}') from ex
+
+        # DB 上のファイル情報と実体を突き合わせ、差分がなければ何もしない
+        file_created_at = datetime.fromtimestamp(stat.st_ctime, tz=JST)
+        file_modified_at = datetime.fromtimestamp(stat.st_mtime, tz=JST)
+        file_metadata_changed = (
+            recorded_video.file_created_at != file_created_at or
+            recorded_video.file_modified_at != file_modified_at or
+            recorded_video.file_size != stat.st_size
+        )
+        if file_metadata_changed is False:
+            return False
+
+        # 更新直後のファイルを強制解析すると、外部トランスコードの一時出力を完成品として保存しかねない
+        ## 最終更新から録画完了判定と同じ時間が経過するまでは、呼び出し元へ再試行可能なエラーとして返す
+        if (datetime.now(tz=JST) - file_modified_at).total_seconds() < self.RECORDING_COMPLETE_SECONDS:
+            raise RecordedFileMetadataNotStableError(f'Recorded file is still being updated: {file_path}')
+
+        # 詳細取得と HLS の複数リクエストが同時に来ても、ファイルパスごとに再解析タスクを 1 個だけ生成する
+        async with self._metadata_refresh_tasks_lock:
+            refresh_task = self._metadata_refresh_tasks.get(file_path)
+            if refresh_task is None:
+                refresh_task = asyncio.create_task(self.__refreshRecordedFileMetadata(file_path))
+                self._metadata_refresh_tasks[file_path] = refresh_task
+                refresh_task.add_done_callback(
+                    lambda completed_task: self.__handleMetadataRefreshTaskDone(file_path, completed_task)
+                )
+
+        try:
+            # クライアント切断で共有タスクまでキャンセルされないよう shield() し、他の待機中リクエストを完走させる
+            await asyncio.shield(refresh_task)
+        except (RecordedFileMetadataNotStableError, RecordedFileMetadataRefreshError):
+            raise
+        except Exception as ex:
+            raise RecordedFileMetadataRefreshError(f'Failed to refresh recorded file metadata: {file_path}') from ex
+        finally:
+            # 最後に完了を観測したリクエストが、同じタスクだけを管理辞書から取り除く
+            async with self._metadata_refresh_tasks_lock:
+                if self._metadata_refresh_tasks.get(file_path) is refresh_task and refresh_task.done():
+                    self._metadata_refresh_tasks.pop(file_path, None)
+
+        # processRecordedFile() は解析失敗をログへ記録して戻るため、DB のファイル情報が実体と一致したことを明示的に検証する
+        refreshed_recorded_video = await RecordedVideo.get_or_none(file_path=str(file_path)).only(
+            'file_created_at',
+            'file_modified_at',
+            'file_size',
+        )
+        if (
+            refreshed_recorded_video is None or
+            refreshed_recorded_video.file_created_at != file_created_at or
+            refreshed_recorded_video.file_modified_at != file_modified_at or
+            refreshed_recorded_video.file_size != stat.st_size
+        ):
+            raise RecordedFileMetadataRefreshError(f'Failed to refresh recorded file metadata: {file_path}')
+
+        return True
+
+
+    def __handleMetadataRefreshTaskDone(
+        self,
+        file_path: anyio.Path,
+        completed_task: asyncio.Task[None],
+    ) -> None:
+        """
+        共有メタデータ再解析タスクの完了後クリーンアップを行う。
+
+        Args:
+            file_path (anyio.Path): 完了した再解析タスクに対応する録画ファイルのパス。
+            completed_task (asyncio.Task[None]): 完了した共有再解析タスク。
+
+        Returns:
+            None
+        """
+
+        # 全リクエストが切断された場合も例外を回収し、完了済みタスクを管理辞書へ残さない
+        if completed_task.cancelled() is False:
+            completed_task.exception()
+        # done callback はイベントループ上で同期的に実行され、この辞書を更新する他のクリティカルセクションも await を含まない
+        ## そのため完了タスクの同一性を確認して直接削除しても、別タスクの登録と途中で競合することはない
+        if self._metadata_refresh_tasks.get(file_path) is completed_task:
+            self._metadata_refresh_tasks.pop(file_path, None)
+
+
+    async def __refreshRecordedFileMetadata(self, file_path: anyio.Path) -> None:
+        """
+        共有タスク内で録画ファイルのメタデータを再解析する。
+
+        Args:
+            file_path (anyio.Path): 再解析する録画ファイルのパス。
+
+        Returns:
+            None
+
+        Raises:
+            RecordedFileMetadataNotStableError: ファイルが再解析開始前に更新された場合。
+        """
+
+        # タスク生成待ちの間にファイルや DB が更新された可能性があるため、重い解析の直前にもう一度照合する
+        stat = await file_path.stat()
+        file_created_at = datetime.fromtimestamp(stat.st_ctime, tz=JST)
+        file_modified_at = datetime.fromtimestamp(stat.st_mtime, tz=JST)
+        existing_recorded_video = await RecordedVideo.get_or_none(file_path=str(file_path)).only(
+            'file_created_at',
+            'file_modified_at',
+            'file_size',
+        )
+        if (
+            existing_recorded_video is not None and
+            existing_recorded_video.file_created_at == file_created_at and
+            existing_recorded_video.file_modified_at == file_modified_at and
+            existing_recorded_video.file_size == stat.st_size
+        ):
+            return
+
+        # 待機中に再度更新された場合は、完成品とみなさず呼び出し元へ再試行可能なエラーとして返す
+        if (datetime.now(tz=JST) - file_modified_at).total_seconds() < self.RECORDING_COMPLETE_SECONDS:
+            raise RecordedFileMetadataNotStableError(f'Recorded file changed before metadata refresh: {file_path}')
+
+        # ファイル監視が録画中と認識している場合は、古い mtime だけを根拠に完成品とみなさない
+        if file_path in self._recording_files:
+            raise RecordedFileMetadataNotStableError(f'Recorded file is active before metadata refresh: {file_path}')
+
+        logging.info(
+            f'{file_path}: File metadata changed outside KonomiTV. '
+            f'Refreshing recorded video metadata before playback.'
+        )
+        await self.processRecordedFile(
+            file_path = file_path,
+            force_update = True,
+            files_only = True,
+        )
 
 
     async def processRecordedFile(
