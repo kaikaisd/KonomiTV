@@ -20,6 +20,8 @@ class SeriesBroadcastPeriod(TortoiseModel):
     # データベース上のテーブル名
     class Meta(TortoiseModel.Meta):
         table: str = 'series_broadcast_periods'
+        # 同一シリーズ・同一チャンネルの放送期間は 1 レコードに統合する
+        unique_together = (('series', 'channel'),)
 
     id = fields.IntField(pk=True)
     series: fields.ForeignKeyRelation[Series] = \
