@@ -16,6 +16,7 @@ from app import logging, schemas
 from app.config import Config
 from app.constants import LIBRARY_PATH
 from app.models.EncodingTask import EncodingTask
+from app.models.RecordedProgram import RecordedProgram
 from app.models.RecordedVideo import RecordedVideo
 
 
@@ -436,9 +437,13 @@ class EncodingQueueManager:
             logging.info(f'[EncodingQueueManager] CM sections not yet analyzed or previously empty. '
                          f'Running on-demand CM detection... [task_id: {task.id}, recorded_video_id: {task.recorded_video_id}]')
             from app.metadata.CMSectionsDetector import CMSectionsDetector
+            # JLS 解析はサービス ID で対象ストリームを選ぶため、対応する録画番組を引く
+            db_recorded_program = await RecordedProgram.get_or_none(recorded_video_id=recorded_video.id)
             detector = CMSectionsDetector(
                 file_path=anyio.Path(recorded_video.file_path),
                 duration_sec=recorded_video.duration,
+                container_format=recorded_video.container_format,
+                service_id=db_recorded_program.service_id if db_recorded_program is not None else None,
             )
             await detector.detectAndSave()
             # DB から最新の CM 区間情報を再取得する

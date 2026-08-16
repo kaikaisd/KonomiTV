@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 from collections.abc import Coroutine
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 import anyio
 import psutil
@@ -25,6 +25,7 @@ from app.constants import (
     RESTART_REQUIRED_LOCK_PATH,
     THUMBNAILS_DIR,
 )
+from app.metadata.CMAnalyzer import CMContainerFormat
 from app.metadata.CMSectionsDetector import CMSectionsDetector
 from app.metadata.RecordedScanTask import RecordedScanTask
 from app.metadata.ThumbnailGenerator import ThumbnailGenerator
@@ -244,6 +245,7 @@ async def BackgroundAnalysisAPI():
             'file_path',
             'file_hash',
             'duration',
+            'container_format',
             'cm_sections',
         )
 
@@ -264,9 +266,15 @@ async def BackgroundAnalysisAPI():
                 ## cm_sections が [] の時は「解析はしたが CM 区間がなかった/検出に失敗した」ことを表している
                 ## CM 区間解析はかなり計算コストが高い処理のため、一度解析に失敗した録画ファイルは再解析しない
                 if video_row['cm_sections'] is None:
+                    # JLS 解析はサービス ID で対象ストリームを選ぶため、対応する録画番組を引く
+                    db_recorded_program = await RecordedProgram.all() \
+                        .select_related('recorded_video') \
+                        .get_or_none(id=video_row['recorded_program_id'])
                     tasks.append(CMSectionsDetector(
                         file_path = anyio.Path(video_row['file_path']),
                         duration_sec = video_row['duration'],
+                        container_format = cast(CMContainerFormat, video_row['container_format']),
+                        service_id = db_recorded_program.service_id if db_recorded_program is not None else None,
                     ).detectAndSave())
 
                 # サムネイルが未生成の場合、タスクに追加
