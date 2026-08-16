@@ -493,6 +493,19 @@ class PlayerController {
 
                     // ビデオストリーミング API のベース URL
                     const streaming_api_base_url = `${Utils.api_base_url}/streams/video/${player_store.recorded_program.id}`;
+                    // MMT/TLV 形式で保存された録画ファイルは、ライブの TLV パススルーと同じ demuxer で直接再生できる
+                    const is_mmts_recorded_video = player_store.recorded_program.recorded_video.container_format === 'MMT/TLV';
+                    // MMT/TLV 録画ファイルでは、FFmpeg / tsreadex を通さず元ファイルをそのままプレイヤーへ渡す画質を追加する
+                    if (is_mmts_recorded_video === true) {
+                        qualities.push({
+                            name: PlayerController.PASSTHROUGH_PRIMARY_QUALITY_NAME,
+                            type: 'tlv',
+                            url: `${streaming_api_base_url}/raw-mmts/mpegts`,
+                            tlv: {
+                                fileSize: player_store.recorded_program.recorded_video.file_size,
+                            },
+                        });
+                    }
                     // 画質リストを作成
                     for (const quality_name of VIDEO_STREAMING_QUALITIES) {
                         // 画質ごとに異なるセッション ID を生成 (セッション ID は UUID の - で区切って一番左側のみを使う)
@@ -507,11 +520,17 @@ class PlayerController {
                     }
                     // デフォルトの画質
                     // ビデオ視聴時はラジオは考慮しない
-                    let default_quality: string = this.quality_profile.video_streaming_quality;
+                    // MMT/TLV 録画では、HLS エンコード経路が MMT/TLV 入力に対応していないため TLV パススルーを既定にする
+                    let default_quality: string = is_mmts_recorded_video === true ?
+                        PlayerController.PASSTHROUGH_PRIMARY_QUALITY_NAME : this.quality_profile.video_streaming_quality;
                     if (options.default_quality !== null) {
                         // PlayerController.init() のオプションでデフォルト画質が指定されている場合は
                         // 画質プロファイルに記載の画質ではなく、指定された（前回再生時の）画質を使ってレジュームする
                         default_quality = options.default_quality;
+                    }
+                    // MMT/TLV 以外の録画番組で TLV パススルーのレジューム情報が残っている場合は通常画質へ戻す
+                    if (default_quality === PlayerController.PASSTHROUGH_PRIMARY_QUALITY_NAME && is_mmts_recorded_video === false) {
+                        default_quality = this.quality_profile.video_streaming_quality;
                     }
                     const tile_info = player_store.recorded_program.recorded_video.thumbnail_info?.tile ?? null;
                     return {

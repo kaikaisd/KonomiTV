@@ -1,12 +1,13 @@
 
 import asyncio
 import json
+import pathlib
 import struct
 import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 from starlette.background import BackgroundTask
 
@@ -102,6 +103,62 @@ async def ValidateQuality(quality: Annotated[str, Path(description='映像の品
         )
 
     return stream_quality
+
+
+@router.get(
+    '/{video_id}/raw-mmts/mpegts',
+    summary = '録画番組 Raw MMTS ストリーム API',
+    response_class = FileResponse,
+    responses = {
+        status.HTTP_200_OK: {
+            'description': '録画ファイルに保存されている MMT/TLV データ。',
+            'content': {'video/mp2t': {}},
+        },
+        status.HTTP_422_UNPROCESSABLE_ENTITY: {
+            'description': '指定された録画番組は Raw MMTS 直通配信に対応していない。',
+        },
+    },
+)
+async def VideoRawMMTSStreamAPI(
+    recorded_program: Annotated[RecordedProgram, Depends(ValidateVideoID)],
+):
+    """
+    MMT/TLV 形式で保存されている録画ファイルを、変換せずにそのまま配信する。<br>
+    ブラウザ側では TLV デマルチプレクサがこのストリームを直接解析する。
+    """
+
+    # Raw MMTS 直通配信は MMT/TLV の録画ファイル専用の経路
+    ## MPEG-TS / MPEG-4 は既存の HLS エンコード経路で扱う
+    if recorded_program.recorded_video.container_format != 'MMT/TLV':
+        logging.error(
+            f'[VideoStreamsRouter][VideoRawMMTSStreamAPI] Specified video_id is not an MMT/TLV file. '
+            f'[video_id: {recorded_program.id}, container_format: {recorded_program.recorded_video.container_format}]'
+        )
+        raise HTTPException(
+            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail = 'Specified video is not an MMT/TLV file',
+        )
+
+    # 録画ファイルの存在を確認する
+    file_path = pathlib.Path(recorded_program.recorded_video.file_path)
+    if file_path.is_file() is False:
+        logging.error(
+            f'[VideoStreamsRouter][VideoRawMMTSStreamAPI] Recorded video file was not found. '
+            f'[video_id: {recorded_program.id}, file_path: {file_path}]'
+        )
+        raise HTTPException(
+            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail = 'Recorded video file was not found',
+        )
+
+    # FileResponse は Range リクエストに対応しているため、シークもブラウザ側から行える
+    return FileResponse(
+        path = file_path,
+        media_type = 'video/mp2t',
+        headers = {
+            'Cache-Control': 'no-store',
+        },
+    )
 
 
 @router.get(
