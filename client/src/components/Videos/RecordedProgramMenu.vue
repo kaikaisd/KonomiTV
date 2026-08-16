@@ -32,10 +32,10 @@
                     <template v-slot:prepend>
                         <Icon icon="fluent:arrow-download-24-regular" width="20px" height="20px" />
                     </template>
+                    <!-- 本家は MMT/TLV (ISDB-S3) 録画に対応しており表示を出し分けているが、
+                         こちらは MPEG-TS / MPEG-4 のみ対応のため、常に同じ表記とする -->
                     <v-list-item-title class="ml-3">
-                        {{program.recorded_video.container_format === 'MMT/TLV'
-                            ? '元の TLV をダウンロード'
-                            : '録画ファイル本体をダウンロード'}}
+                        録画ファイル本体をダウンロード
                         ({{Utils.formatBytes(program.recorded_video.file_size)}})
                     </v-list-item-title>
                 </v-list-item>
