@@ -279,11 +279,55 @@ class StorageInfo(BaseModel):
 
 # ***** シリーズ *****
 
+class SeriesSummary(PydanticModel):
+    id: int
+    title: str
+    description: str
+    genres: list[Genre]
+    thumbnail_recorded_program_ids: list[int]
+    channel_ids: list[str]
+    official_website_url: str | None
+    bangumi_subject_id: int | None
+    bangumi_subject_name: str | None
+    bangumi_subject_name_cn: str | None
+    bangumi_subject_summary: str | None
+    bangumi_subject_image_url: str | None
+    recorded_programs_count: int
+    created_at: datetime
+    updated_at: datetime
+
+class SeriesSummaryList(BaseModel):
+    total: int
+    series_list: list[SeriesSummary]
+
+class SeriesListPosition(BaseModel):
+    page: int
+
+class OnAirSeries(BaseModel):
+    id: int
+    title: str
+    thumbnail_recorded_program_ids: list[int]
+    channel_ids: list[str]
+    recorded_episodes_count: int
+    missing_episodes_count: int
+    partially_recorded_episodes_count: int
+    weekday: Annotated[int, Field(ge=0, le=6)]
+    broadcast_time: str
+    latest_broadcast_at: datetime
+
+class OnAirSeriesList(BaseModel):
+    series_list: list[OnAirSeries]
+
 class Series(PydanticModel):
     id: int
     title: str
     description: str
     genres: list[Genre]
+    bangumi_subject_id: int | None
+    bangumi_subject_name: str | None
+    bangumi_subject_name_cn: str | None
+    bangumi_subject_summary: str | None
+    bangumi_subject_image_url: str | None
     broadcast_periods: list[SeriesBroadcastPeriod]
     created_at: datetime
     updated_at: datetime
