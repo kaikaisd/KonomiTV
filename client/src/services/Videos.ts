@@ -21,7 +21,7 @@ export interface IRecordedVideo {
     recording_start_time: string | null;
     recording_end_time: string | null;
     duration: number;
-    container_format: 'MPEG-TS' | 'MPEG-4';
+    container_format: 'MPEG-TS' | 'MPEG-4' | 'MMT/TLV';
     video_codec: 'MPEG-2' | 'H.264' | 'H.265';
     video_codec_profile: 'High' | 'High 10' | 'Main' | 'Main 10' | 'Baseline' | 'Constrained Baseline';
     video_scan_type: 'Interlaced' | 'Progressive';
@@ -30,10 +30,10 @@ export interface IRecordedVideo {
     video_resolution_height: number;
     has_video_stream_changes: boolean;
     primary_audio_codec: 'AAC-LC';
-    primary_audio_channel: 'Monaural' | 'Stereo' | '5.1ch';
+    primary_audio_channel: 'Monaural' | 'Stereo' | '3ch' | '4ch' | '5ch' | '5.1ch' | '6.1ch' | '7.1ch' | '10.2ch' | '22.2ch';
     primary_audio_sampling_rate: number;
     secondary_audio_codec: 'AAC-LC' | null;
-    secondary_audio_channel: 'Monaural' | 'Stereo' | '5.1ch' | null;
+    secondary_audio_channel: 'Monaural' | 'Stereo' | '3ch' | '4ch' | '5ch' | '5.1ch' | '6.1ch' | '7.1ch' | '10.2ch' | '22.2ch' | null;
     secondary_audio_sampling_rate: number | null;
     cm_sections: { start_time: number; end_time: number; }[] | null;
     thumbnail_info: IThumbnailInfo | null;
@@ -314,6 +314,41 @@ class Videos {
      * @param video_id 録画番組の ID
      * @returns 録画番組情報 or 録画番組情報の取得に失敗した場合は null
      */
+    /**
+     * 指定されたシリーズに属する録画番組一覧を取得する
+     * @param series_id シリーズ ID
+     * @param series_broadcast_period_id シリーズ放送期間 ID (指定時は同一放送期間に絞り込む)
+     * @param order ソート順序 ('desc' or 'asc')
+     * @param page ページ番号
+     * @returns 録画番組一覧情報 or 取得に失敗した場合は null
+     */
+    static async fetchVideosBySeries(
+        series_id: number,
+        series_broadcast_period_id: number | null = null,
+        order: 'desc' | 'asc' = 'desc',
+        page: number = 1,
+    ): Promise<IRecordedPrograms | null> {
+
+        // 本家はシリーズ専用のエンドポイントを別途用意しているが、
+        // こちらは録画番組一覧 API のサーバー側絞り込みを使い、同じクエリを再利用している
+        const response = await APIClient.get<IRecordedPrograms>('/videos', {
+            params: {
+                order,
+                page,
+                series_id,
+                series_broadcast_period_id,
+            },
+        });
+
+        if (response.type === 'error') {
+            APIClient.showGenericError(response, 'シリーズの録画番組を取得できませんでした。');
+            return null;
+        }
+
+        return response.data;
+    }
+
+
     static async fetchVideo(video_id: number): Promise<IRecordedProgram | null> {
 
         // API リクエストを実行

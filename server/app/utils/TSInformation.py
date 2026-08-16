@@ -1,7 +1,9 @@
 
 import multiprocessing
 import re
-from typing import ClassVar, Literal, cast
+from datetime import datetime
+from typing import Any, ClassVar, Literal, cast
+from zoneinfo import ZoneInfo
 
 from ariblib.aribstr import AribString
 from tortoise import Tortoise, connections
@@ -734,6 +736,81 @@ class TSInformation:
             is_subchannel = False
 
         return is_subchannel
+
+
+    @classmethod
+    def parseFilenameInfo(cls, filename: str) -> dict[str, Any]:
+        """
+        録画ファイル名から開始時刻と番組名を解析する
+        対応フォーマット:
+        - 2025年09月23日01時40分00秒-劇場版「オーバーロード」聖王国編 [字].m2ts
+        - 20260622-211-011000_62f1e65b-b71d-4e8a-8b1c-16fa65f9d5d3.m2ts
+
+        Args:
+            filename (str): 拡張子を除いたファイル名
+
+        Returns:
+            dict: {
+                'start_time': datetime | None,  # 開始時刻
+                'program_title': str | None,    # 番組タイトル
+                'original_filename': str        # 元のファイル名
+            }
+        """
+
+        result: dict[str, Any] = {
+            'start_time': None,
+            'program_title': None,
+            'original_filename': filename
+        }
+
+        # 日時パターンをマッチ: 2025年09月23日01時40分00秒-
+        datetime_pattern = r'(\d{4})年(\d{2})月(\d{2})日(\d{2})時(\d{2})分(\d{2})秒'
+        match = re.search(datetime_pattern, filename)
+
+        if match:
+            try:
+                year, month, day, hour, minute, second = map(int, match.groups())
+                result['start_time'] = datetime(
+                    year, month, day, hour, minute, second,
+                    tzinfo=ZoneInfo('Asia/Tokyo')
+                )
+
+                # 日時部分の後から番組タイトルを抽出
+                # 日時部分とダッシュを除去
+                title_part = filename[match.end():]
+                if title_part.startswith('-'):
+                    title_part = title_part[1:]
+
+                # 末尾の属性情報（[字], [解], [S] など）を除去
+                title_part = re.sub(r'\s*\[[^\]]*\].*$', '', title_part)
+
+                # 前後の空白を除去してタイトルとして設定
+                if title_part.strip():
+                    result['program_title'] = cls.formatString(title_part.strip())
+
+            except (ValueError, TypeError):
+                # 日時の解析に失敗した場合は None のまま
+                pass
+
+        # KonomiTV の一部録画ファイル名は「YYYYMMDD-service_id-HHMMSS_uuid」のように、
+        ## 番組名を含まず日時とサービス ID だけを持つ
+        ## EIT[p/f] の TOT 解析が壊れた録画ファイルでは、この日時だけでも番組境界の推定に使える
+        if result['start_time'] is None:
+            compact_datetime_pattern = r'^(\d{4})(\d{2})(\d{2})-\d+-(\d{2})(\d{2})(\d{2})(?:_|-|$)'
+            match = re.search(compact_datetime_pattern, filename)
+
+            if match:
+                try:
+                    year, month, day, hour, minute, second = map(int, match.groups())
+                    result['start_time'] = datetime(
+                        year, month, day, hour, minute, second,
+                        tzinfo=ZoneInfo('Asia/Tokyo')
+                    )
+                except (ValueError, TypeError):
+                    # 日時の解析に失敗した場合は None のまま
+                    pass
+
+        return result
 
 
 # REGION_ID_TO_REGION_NAMES の初期化

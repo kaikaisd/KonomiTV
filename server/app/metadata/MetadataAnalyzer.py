@@ -14,6 +14,7 @@ from rich import print
 from app import logging, schemas
 from app.config import Config, LoadConfig
 from app.constants import JST, LIBRARY_PATH
+from app.metadata.MMTSInfoAnalyzer import MMTSInfoAnalyzer
 from app.metadata.TSInfoAnalyzer import TSInfoAnalyzer
 from app.utils import ClosestMultiple
 from app.utils.TSInformation import TSInformation
@@ -283,6 +284,27 @@ class MetadataAnalyzer:
         secondary_audio_codec: Literal['AAC-LC'] | None = None
         secondary_audio_channel: Literal['Monaural', 'Stereo', '5.1ch'] | None = None
         secondary_audio_sampling_rate: int | None = None
+
+        # MMT/TLV の番組メタデータは、FFprobe が返す映像・音声ストリームではなく MMT-SI を正として解析する
+        ## MMT/TLV 対応 FFprobe を導入した環境では format_name=mmttlv が返るため、FFprobe より先に判定しないと
+        ## MPEG-TS / MP4 専用の汎用解析へ入り、コンテナ形式の検証エラーや不完全な番組情報を発生させてしまう
+        if MMTSInfoAnalyzer.probe(self.recorded_file_path) is True:
+            try:
+                file_hash = self.__calculateFileHash(None)
+                stat_info = self.recorded_file_path.stat()
+                analyzer = MMTSInfoAnalyzer(self.recorded_file_path, selected_service_id=self.selected_service_id)
+                recorded_program = analyzer.analyze(
+                    file_hash = file_hash,
+                    file_size = stat_info.st_size,
+                    file_created_at = datetime.fromtimestamp(stat_info.st_ctime, tz=JST),
+                    file_modified_at = datetime.fromtimestamp(stat_info.st_mtime, tz=JST),
+                )
+                if recorded_program is not None:
+                    logging.debug(f'{self.recorded_file_path}: MMT/TLV metadata analysis completed.')
+                return recorded_program
+            except Exception as ex:
+                logging.warning(f'{self.recorded_file_path}: MMT/TLV metadata analysis failed:', exc_info=ex)
+                return None
 
         # FFprobe から録画ファイルのメディア情報を取得
         ## 取得に失敗した場合は KonomiTV で再生可能なファイルではないと判断し、None を返す

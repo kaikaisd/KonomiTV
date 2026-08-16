@@ -1,8 +1,11 @@
 
 import asyncio
 import copy
+import time
+from collections.abc import AsyncGenerator
 from typing import Annotated
 
+import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 from fastapi.requests import Request
 from fastapi.responses import Response, StreamingResponse
@@ -10,12 +13,15 @@ from sse_starlette.sse import EventSourceResponse
 from starlette.types import Receive
 
 from app import logging, schemas
+from app.config import Config
+from app.constants import API_REQUEST_HEADERS
 from app.models.Channel import Channel
 from app.streams.LiveStream import LiveStream, LiveStreamStatus
 from app.streams.StreamEncodingOptions import (
-    SplitQualityAndEncodingOptions,
-    StreamQualityWithOptions,
+    LiveStreamQualityWithOptions,
+    SplitLiveQualityAndEncodingOptions,
 )
+from app.utils import GetMirakurunAPIEndpointURL
 
 
 # ルーター
@@ -39,12 +45,13 @@ async def ValidateChannelID(display_channel_id: Annotated[str, Path(description=
     return display_channel_id
 
 
-async def ValidateQuality(quality: Annotated[str, Path(description='映像の品質。ex: 1080p')]) -> StreamQualityWithOptions:
+async def ValidateQuality(quality: Annotated[str, Path(description='映像の品質。ex: 1080p')]) -> LiveStreamQualityWithOptions:
     """ 映像の品質のバリデーション """
 
     # 指定された品質が存在するか確認
     ## 品質の指定に -10bit や -24fps が付いていれば分解する
-    stream_quality = SplitQualityAndEncodingOptions(quality)
+    ## ライブストリームでは BS4K Raw MMTS 専用の raw-mmts も受け付ける
+    stream_quality = SplitLiveQualityAndEncodingOptions(quality)
     if stream_quality is None:
         logging.error(f'[LiveStreamsRouter][ValidateQuality] Specified quality was not found. [quality: {quality}]')
         raise HTTPException(
@@ -53,6 +60,157 @@ async def ValidateQuality(quality: Annotated[str, Path(description='映像の品
         )
 
     return stream_quality
+
+
+def BuildDirectRawMMTSLiveStreamStatus() -> schemas.LiveStreamStatus:
+    """
+    Raw MMTS 直通配信用の軽量ライブストリームステータスを生成する。
+
+    Args:
+        なし
+
+    Returns:
+        schemas.LiveStreamStatus: Raw MMTS 直通配信用の疑似ライブストリームステータス
+    """
+
+    now = time.time()
+    return schemas.LiveStreamStatus(
+        status = 'ONAir',
+        detail = 'Raw MMTS passthrough is ONAir.',
+        started_at = now,
+        updated_at = now,
+        client_count = 0,
+    )
+
+
+async def OpenMirakurunRawMMTSStream(display_channel_id: str) -> tuple[aiohttp.ClientSession, aiohttp.ClientResponse]:
+    """
+    Mirakurun の BS4K Raw MMTS ストリームを decode=0 で直接開く。
+
+    Args:
+        display_channel_id (str): 視聴対象のチャンネル ID
+
+    Returns:
+        tuple[aiohttp.ClientSession, aiohttp.ClientResponse]: Mirakurun への HTTP セッションとレスポンス
+    """
+
+    # Raw MMTS 直通は Mirakurun / mirakc の Service Stream API が前提
+    backend_type = 'Mirakurun' if Config().general.always_receive_tv_from_mirakurun is True else Config().general.backend
+    if backend_type != 'Mirakurun':
+        logging.error(
+            '[LiveStreamsRouter][OpenMirakurunRawMMTSStream] '
+            'Raw MMTS is only available with Mirakurun / mirakc receiving backend.'
+        )
+        raise HTTPException(
+            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail = 'Raw MMTS is only available with Mirakurun / mirakc receiving backend',
+        )
+
+    # チャンネル情報を取得
+    channel = await Channel.filter(display_channel_id=display_channel_id).get_or_none()
+    if channel is None:
+        logging.error(
+            f'[LiveStreamsRouter][OpenMirakurunRawMMTSStream] Specified display_channel_id was not found. '
+            f'[display_channel_id: {display_channel_id}]'
+        )
+        raise HTTPException(
+            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail = 'Specified display_channel_id was not found',
+        )
+
+    # Raw MMTS は BS4K チャンネル専用
+    if channel.type != 'BS4K':
+        logging.error(
+            f'[LiveStreamsRouter][OpenMirakurunRawMMTSStream] Raw MMTS is only available for BS4K channels. '
+            f'[display_channel_id: {display_channel_id}]'
+        )
+        raise HTTPException(
+            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail = 'Raw MMTS is only available for BS4K channels',
+        )
+
+    # Mirakurun 形式のサービス ID
+    # NID と SID を 5 桁でゼロ埋めした上で int に変換する
+    mirakurun_service_id = int(str(channel.network_id).zfill(5) + str(channel.service_id).zfill(5))
+
+    # Mirakurun の Service Stream API へ HTTP リクエストを開始
+    session = aiohttp.ClientSession()
+    try:
+        response = await session.get(
+            url = GetMirakurunAPIEndpointURL(f'/api/services/{mirakurun_service_id}/stream?decode=0'),
+            headers = {**API_REQUEST_HEADERS, 'X-Mirakurun-Priority': '0'},
+            timeout = aiohttp.ClientTimeout(total=None, connect=15, sock_connect=15),
+        )
+    except (TimeoutError, aiohttp.ClientConnectorError) as ex:
+        await session.close()
+        logging.error(
+            f'[LiveStreamsRouter][OpenMirakurunRawMMTSStream] Failed to connect to Mirakurun / mirakc. '
+            f'[display_channel_id: {display_channel_id}]',
+            exc_info = ex,
+        )
+        raise HTTPException(
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail = 'Failed to connect to Mirakurun / mirakc',
+        ) from ex
+
+    # Mirakurun の Service Stream API からエラーが返された場合
+    if response.status != 200:
+        response.close()
+        await session.close()
+        logging.error(
+            f'[LiveStreamsRouter][OpenMirakurunRawMMTSStream] Mirakurun / mirakc returned HTTP {response.status}. '
+            f'[display_channel_id: {display_channel_id}]'
+        )
+        raise HTTPException(
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail = f'Mirakurun / mirakc returned HTTP {response.status}',
+        )
+
+    return session, response
+
+
+async def GenerateMirakurunRawMMTSStream(
+    request: Request,
+    session: aiohttp.ClientSession,
+    response: aiohttp.ClientResponse,
+) -> AsyncGenerator[bytes, None]:
+    """
+    Mirakurun から受け取った Raw MMTS を、そのまま StreamingResponse へ流す。
+
+    Args:
+        request (Request): FastAPI のリクエスト
+        session (aiohttp.ClientSession): Mirakurun への HTTP セッション
+        response (aiohttp.ClientResponse): Mirakurun からの HTTP レスポンス
+
+    Yields:
+        bytes: Raw MMTS のチャンク
+    """
+
+    try:
+        while True:
+            # リクエストがキャンセル（切断）されている場合は Mirakurun との接続も閉じる
+            if await request.is_disconnected():
+                logging.debug('[LiveStreamsRouter][GenerateMirakurunRawMMTSStream] Request is disconnected.')
+                break
+
+            try:
+                chunk = await response.content.read(512 * 1024)
+            except (aiohttp.ClientError, TimeoutError):
+                logging.warning(
+                    '[LiveStreamsRouter][GenerateMirakurunRawMMTSStream] '
+                    'Mirakurun / mirakc stream was interrupted.'
+                )
+                break
+
+            # 空のデータが返ってきたら、Mirakurun とのストリーミング接続が終了したものと判断する
+            if len(chunk) == 0:
+                break
+
+            yield chunk
+
+    finally:
+        response.close()
+        await session.close()
 
 
 @router.get(
@@ -93,7 +251,7 @@ async def LiveStreamsAPI():
 )
 async def LiveStreamAPI(
     display_channel_id: Annotated[str, Depends(ValidateChannelID)],
-    stream_quality: Annotated[StreamQualityWithOptions, Depends(ValidateQuality)],
+    stream_quality: Annotated[LiveStreamQualityWithOptions, Depends(ValidateQuality)],
 ):
     """
     ライブストリームの状態を取得する。<br>
@@ -102,6 +260,10 @@ async def LiveStreamAPI(
 
     # 品質とオプション指定に対応する LiveStream を取得する
     # ステータスを取得したいだけなので、接続はしない
+    # Raw MMTS は直通配信のため、LiveStream の再利用・ステータス管理には載せない
+    if stream_quality.quality == 'raw-mmts':
+        return BuildDirectRawMMTSLiveStreamStatus()
+
     live_stream = LiveStream(display_channel_id, stream_quality.quality, stream_quality.encoding_options)
 
     # 取得してきた値をそのまま返す
@@ -120,8 +282,9 @@ async def LiveStreamAPI(
     }
 )
 async def LiveStreamEventAPI(
+    request: Request,
     display_channel_id: Annotated[str, Depends(ValidateChannelID)],
-    stream_quality: Annotated[StreamQualityWithOptions, Depends(ValidateQuality)],
+    stream_quality: Annotated[LiveStreamQualityWithOptions, Depends(ValidateQuality)],
 ):
     """
     ライブストリームのイベントを Server-Sent Events で随時配信する。
@@ -139,6 +302,21 @@ async def LiveStreamEventAPI(
 
     # 品質とオプション指定に対応する LiveStream を取得する
     # ステータスを取得したいだけなので、接続はしない
+    # Raw MMTS は直通配信のため、LiveStream の再利用・ステータス管理には載せない
+    ## ただしクライアント側はライブ状態監視にこの SSE を使うため、軽量な ONAir ステータスだけ返す
+    if stream_quality.quality == 'raw-mmts':
+        async def raw_mmts_generator():
+            raw_mmts_status = BuildDirectRawMMTSLiveStreamStatus()
+            yield {
+                'event': 'initial_update',
+                'data': raw_mmts_status.model_dump_json(),
+            }
+
+            while await request.is_disconnected() is False:
+                await asyncio.sleep(5)
+
+        return EventSourceResponse(raw_mmts_generator())
+
     live_stream = LiveStream(display_channel_id, stream_quality.quality, stream_quality.encoding_options)
 
     # ステータスの変更を監視し、変更があればステータスをイベントストリームとして出力する
@@ -216,7 +394,7 @@ async def LiveStreamEventAPI(
 async def LivePSIArchivedDataAPI(
     request: Request,
     display_channel_id: Annotated[str, Depends(ValidateChannelID)],
-    stream_quality: Annotated[StreamQualityWithOptions, Depends(ValidateQuality)],
+    stream_quality: Annotated[LiveStreamQualityWithOptions, Depends(ValidateQuality)],
 ):
     """
     ライブ PSI/SI アーカイブデータストリームを配信する。
@@ -282,7 +460,7 @@ async def LivePSIArchivedDataAPI(
 async def LiveMPEGTSStreamAPI(
     request: Request,
     display_channel_id: Annotated[str, Depends(ValidateChannelID)],
-    stream_quality: Annotated[StreamQualityWithOptions, Depends(ValidateQuality)],
+    stream_quality: Annotated[LiveStreamQualityWithOptions, Depends(ValidateQuality)],
 ):
     """
     ライブ MPEG-TS ストリームを配信する。
@@ -296,6 +474,20 @@ async def LiveMPEGTSStreamAPI(
 
     # 品質とオプション指定に対応する LiveStream に接続し、ライブストリームクライアントを取得する
     ## 接続時に Offline だった場合は自動的にエンコードタスクが起動される
+    # Raw MMTS は BS4K/BS8K の TLV/MMT を変換せずブラウザへ渡す専用経路
+    ## 通常の LiveStream Queue / LiveEncodingTask の共有経路を通すと per-chunk のオーバーヘッドが増えるため、
+    ## Mirakurun の decode=0 ストリームをこのリクエスト専用に直接中継する
+    if stream_quality.quality == 'raw-mmts':
+        session, response_upstream = await OpenMirakurunRawMMTSStream(display_channel_id)
+        return StreamingResponse(
+            GenerateMirakurunRawMMTSStream(request, session, response_upstream),
+            media_type = 'video/mp2t',
+            headers = {
+                'Cache-Control': 'no-store',
+                'X-Accel-Buffering': 'no',
+            },
+        )
+
     live_stream = LiveStream(display_channel_id, stream_quality.quality, stream_quality.encoding_options)
     live_stream_client = await live_stream.connect('mpegts')
 

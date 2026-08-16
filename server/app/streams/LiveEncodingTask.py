@@ -544,6 +544,10 @@ class LiveEncodingTask:
         # エンコーダーの種類を取得
         ENCODER_TYPE = CONFIG.general.encoder
 
+        # raw-mmts は LiveStreamsRouter 側で直接中継され、エンコードタスクには到達しない
+        ## ここで型を QUALITY_TYPES へ絞り込み、エンコードオプション構築へ安全に渡せるようにする
+        assert self.live_stream.quality != 'raw-mmts', 'raw-mmts is relayed directly and must not reach LiveEncodingTask.'
+
         # まだ Standby になっていなければ、ステータスを Standby に設定
         # 基本はエンコードタスクの呼び出し元である self.live_stream.connect() の方で Standby に設定されるが、再起動の場合はそこを経由しないため必要
         if not (self.live_stream.getStatus().status == 'Standby' and self.live_stream.getStatus().detail == 'エンコードタスクを起動しています…'):

@@ -16,6 +16,7 @@ import LiveCommentManager from '@/services/player/managers/LiveCommentManager';
 import LiveDataBroadcastingManager from '@/services/player/managers/LiveDataBroadcastingManager';
 import LiveEventManager from '@/services/player/managers/LiveEventManager';
 import MediaSessionManager from '@/services/player/managers/MediaSessionManager';
+import RecordedCMSkipManager from '@/services/player/managers/RecordedCMSkipManager';
 import PlayerManager from '@/services/player/PlayerManager';
 import Videos, { type IJikkyoComments } from '@/services/Videos';
 import useChannelsStore from '@/stores/ChannelsStore';
@@ -48,6 +49,15 @@ class PlayerController {
 
     // 視聴履歴の更新間隔 (秒)
     private static readonly WATCHED_HISTORY_UPDATE_INTERVAL = 10;
+
+    // 元ストリームを再エンコードせずに再生する特殊な画質の表示名
+    private static readonly PASSTHROUGH_PRIMARY_QUALITY_NAME = 'TLV パススルー';
+    private static readonly PASSTHROUGH_SECONDARY_QUALITY_NAME = 'TLV パススルー（降雨放送）';
+
+    // BS4K/BS8K の TLV/MMT では HEVC 映像アセットが複数存在する
+    // 通常は自動選択に任せ、降雨放送の映像を明示する場合だけ packet_id を固定する
+    private static readonly BS4K_MMTS_SECONDARY_VIDEO_PACKET_ID = 0xf301;
+    private static readonly BS8K_MMTS_SECONDARY_VIDEO_PACKET_ID = 0xf101;
 
     // DPlayer のインスタンス
     private player: DPlayer | null = null;
@@ -275,6 +285,19 @@ class PlayerController {
                 } else {
                     seek_seconds = player_store.recorded_program.recording_start_margin + 2;
                     console.log(`\u001b[31m[PlayerController] Seeking to ${seek_seconds} seconds. (Recording Start Margin + 2)`);
+                    // 視聴履歴がない初回再生に限り、冒頭が CM 区間ならその終わりまで飛ばして本編から再生を開始する
+                    // 視聴履歴がある場合は、ユーザーが前回中断した位置を常に優先する
+                    if (settings_store.settings.video_auto_skip_cm === true) {
+                        const cm_skip_target = RecordedCMSkipManager.getInitialSkipTarget(
+                            seek_seconds,
+                            player_store.recorded_program.recorded_video.cm_sections,
+                            player_store.recorded_program.recorded_video.duration,
+                        );
+                        if (cm_skip_target !== null) {
+                            seek_seconds = cm_skip_target;
+                            console.log(`\u001b[31m[PlayerController] Seeking to ${seek_seconds} seconds. (Initial CM Auto Skip)`);
+                        }
+                    }
                 }
             } else {
                 // ライブ再生時は使わない値だが、型エラー回避のために 0 を設定
@@ -383,6 +406,13 @@ class PlayerController {
                 if (this.playback_mode === 'Live') {
                     // ライブストリーミング API のベース URL
                     const streaming_api_base_url = `${Utils.api_base_url}/streams/live/${channels_store.channel.current.display_channel_id}`;
+                    // BS4K チャンネルでは、Mirakurun から decode=0 で受け取った Raw MMTS をそのまま再生できる
+                    const is_bs4k_channel = channels_store.channel.current.type === 'BS4K';
+                    // NHK BSP4K (NID11-SID101) と NHK BS8K (NID11-SID102) のみ降雨放送がある
+                    const has_mmts_secondary_video = channels_store.channel.current.network_id === 11 &&
+                        [101, 102].includes(channels_store.channel.current.service_id);
+                    // NHK BS8K では packet_id が 0xf100 -> 0xf101、それ以外の降雨放送対応 BS4K では 0xf300 -> 0xf301 になる
+                    const is_bs8k_channel = channels_store.channel.current.network_id === 11 && channels_store.channel.current.service_id === 102;
                     // ラジオチャンネルの場合
                     // API が受け付ける画質の値は通常のチャンネルと同じだが (手抜き…)、実際の画質は 48KHz/192kbps で固定される
                     // ラジオチャンネルの場合は、1080p と渡しても 48kHz/192kbps 固定の音声だけの MPEG-TS が配信される
@@ -394,6 +424,27 @@ class PlayerController {
                         });
                     // 通常のチャンネルの場合
                     } else {
+                        // BS4K チャンネルでは TLV パススルーを最優先の選択肢として追加する
+                        // パススルーは設定画面のデフォルト画質とは独立した、ライブ視聴時専用の画質として扱う
+                        if (is_bs4k_channel === true) {
+                            qualities.push({
+                                name: PlayerController.PASSTHROUGH_PRIMARY_QUALITY_NAME,
+                                type: 'tlv',
+                                url: `${streaming_api_base_url}/raw-mmts/mpegts`,
+                            });
+                            if (has_mmts_secondary_video === true) {
+                                qualities.push({
+                                    name: PlayerController.PASSTHROUGH_SECONDARY_QUALITY_NAME,
+                                    type: 'tlv',
+                                    url: `${streaming_api_base_url}/raw-mmts/mpegts`,
+                                    tlv: {
+                                        videoPacketId: is_bs8k_channel === true ?
+                                            PlayerController.BS8K_MMTS_SECONDARY_VIDEO_PACKET_ID :
+                                            PlayerController.BS4K_MMTS_SECONDARY_VIDEO_PACKET_ID,
+                                    },
+                                });
+                            }
+                        }
                         // 画質リストを作成
                         for (const quality_name of LIVE_STREAMING_QUALITIES) {
                             qualities.push({
@@ -405,11 +456,22 @@ class PlayerController {
                         }
                     }
                     // デフォルトの画質
-                    let default_quality: string = this.quality_profile.tv_streaming_quality;
+                    // BS4K チャンネルでは設定画面のデフォルト画質に関わらず TLV パススルーを初期選択にする
+                    let default_quality: string = is_bs4k_channel === true ?
+                        PlayerController.PASSTHROUGH_PRIMARY_QUALITY_NAME : this.quality_profile.tv_streaming_quality;
                     if (options.default_quality !== null) {
                         // PlayerController.init() のオプションでデフォルト画質が指定されている場合は
                         // 画質プロファイルに記載の画質ではなく、指定された（前回再生時の）画質を使ってレジュームする
                         default_quality = options.default_quality;
+                    }
+                    // BS4K から通常チャンネルへ切り替えた際、前回の画質として TLV パススルーが持ち越されることがある
+                    // パススルーは BS4K でしか配信できないため、その場合は設定画面のデフォルト画質へ戻す
+                    if (
+                        (default_quality === PlayerController.PASSTHROUGH_PRIMARY_QUALITY_NAME ||
+                         default_quality === PlayerController.PASSTHROUGH_SECONDARY_QUALITY_NAME) &&
+                        is_bs4k_channel === false
+                    ) {
+                        default_quality = this.quality_profile.tv_streaming_quality;
                     }
                     // ラジオチャンネルのみ常に 48KHz/192kbps に固定する
                     if (channels_store.channel.current.is_radiochannel) {
@@ -445,6 +507,19 @@ class PlayerController {
 
                     // ビデオストリーミング API のベース URL
                     const streaming_api_base_url = `${Utils.api_base_url}/streams/video/${player_store.recorded_program.id}`;
+                    // MMT/TLV 形式で保存された録画ファイルは、ライブの TLV パススルーと同じ demuxer で直接再生できる
+                    const is_mmts_recorded_video = player_store.recorded_program.recorded_video.container_format === 'MMT/TLV';
+                    // MMT/TLV 録画ファイルでは、FFmpeg / tsreadex を通さず元ファイルをそのままプレイヤーへ渡す画質を追加する
+                    if (is_mmts_recorded_video === true) {
+                        qualities.push({
+                            name: PlayerController.PASSTHROUGH_PRIMARY_QUALITY_NAME,
+                            type: 'tlv',
+                            url: `${streaming_api_base_url}/raw-mmts/mpegts`,
+                            tlv: {
+                                fileSize: player_store.recorded_program.recorded_video.file_size,
+                            },
+                        });
+                    }
                     // 画質リストを作成
                     for (const quality_name of VIDEO_STREAMING_QUALITIES) {
                         // 画質ごとに異なるセッション ID を生成 (セッション ID は UUID の - で区切って一番左側のみを使う)
@@ -459,11 +534,17 @@ class PlayerController {
                     }
                     // デフォルトの画質
                     // ビデオ視聴時はラジオは考慮しない
-                    let default_quality: string = this.quality_profile.video_streaming_quality;
+                    // MMT/TLV 録画では、HLS エンコード経路が MMT/TLV 入力に対応していないため TLV パススルーを既定にする
+                    let default_quality: string = is_mmts_recorded_video === true ?
+                        PlayerController.PASSTHROUGH_PRIMARY_QUALITY_NAME : this.quality_profile.video_streaming_quality;
                     if (options.default_quality !== null) {
                         // PlayerController.init() のオプションでデフォルト画質が指定されている場合は
                         // 画質プロファイルに記載の画質ではなく、指定された（前回再生時の）画質を使ってレジュームする
                         default_quality = options.default_quality;
+                    }
+                    // MMT/TLV 以外の録画番組で TLV パススルーのレジューム情報が残っている場合は通常画質へ戻す
+                    if (default_quality === PlayerController.PASSTHROUGH_PRIMARY_QUALITY_NAME && is_mmts_recorded_video === false) {
+                        default_quality = this.quality_profile.video_streaming_quality;
                     }
                     const tile_info = player_store.recorded_program.recorded_video.thumbnail_info?.tile ?? null;
                     return {
@@ -1082,6 +1163,7 @@ class PlayerController {
         } else {
             // ビデオ視聴時に設定する PlayerManager
             this.player_managers = [
+                new RecordedCMSkipManager(this.player),
                 new CaptureManager(this.player, this.playback_mode),
                 new DocumentPiPManager(this.player, this.playback_mode),
                 new KeyboardShortcutManager(this.player, this.playback_mode),

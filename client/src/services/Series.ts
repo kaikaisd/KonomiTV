@@ -10,6 +10,11 @@ export interface ISeries {
     title: string;
     description: string;
     genres: { major: string; middle: string; }[];
+    bangumi_subject_id: number | null;
+    bangumi_subject_name: string | null;
+    bangumi_subject_name_cn: string | null;
+    bangumi_subject_summary: string | null;
+    bangumi_subject_image_url: string | null;
     broadcast_periods: ISeriesBroadcastPeriod[];
     created_at: string;
     updated_at: string;
@@ -19,6 +24,44 @@ export interface ISeries {
 export interface ISeriesList {
     total: number;
     series_list: ISeries[];
+}
+
+/** 放送中シリーズを表すインターフェース */
+export interface IOnAirSeries {
+    id: number;
+    title: string;
+    thumbnail_recorded_program_ids: number[];
+    channel_ids: string[];
+    recorded_episodes_count: number;
+    missing_episodes_count: number;
+    partially_recorded_episodes_count: number;
+    weekday: number;
+    broadcast_time: string;
+    latest_broadcast_at: string;
+}
+
+/** 放送中シリーズリストを表すインターフェース */
+export interface IOnAirSeriesList {
+    series_list: IOnAirSeries[];
+}
+
+/** シリーズ一覧に表示する概要情報を表すインターフェース */
+export interface ISeriesSummary {
+    id: number;
+    title: string;
+    description: string;
+    genres: { major: string; middle: string; }[];
+    thumbnail_recorded_program_ids: number[];
+    channel_ids: string[];
+    official_website_url: string | null;
+    bangumi_subject_id: number | null;
+    bangumi_subject_name: string | null;
+    bangumi_subject_name_cn: string | null;
+    bangumi_subject_summary: string | null;
+    bangumi_subject_image_url: string | null;
+    recorded_programs_count: number;
+    created_at: string;
+    updated_at: string;
 }
 
 /** シリーズ放送期間を表すインターフェース */
@@ -38,6 +81,37 @@ class Series {
      * @param page ページ番号
      * @returns シリーズ一覧情報 or シリーズ一覧情報の取得に失敗した場合は null
      */
+    /**
+     * 放送中シリーズ一覧を取得する
+     * @returns 放送中シリーズ一覧 or 取得に失敗した場合は null
+     */
+    static async fetchOnAirSeriesList(): Promise<IOnAirSeriesList | null> {
+
+        const response = await APIClient.get<IOnAirSeriesList>('/series/on-air');
+        if (response.type === 'error') {
+            APIClient.showGenericError(response, '放送中のシリーズを取得できませんでした。');
+            return null;
+        }
+        return response.data;
+    }
+
+
+    /**
+     * シリーズ概要を取得する
+     * @param series_id シリーズ ID
+     * @returns シリーズ概要 or 取得に失敗した場合は null
+     */
+    static async fetchSeriesSummary(series_id: number): Promise<ISeriesSummary | null> {
+
+        const response = await APIClient.get<ISeriesSummary>(`/series/${series_id}/summary`);
+        if (response.type === 'error') {
+            APIClient.showGenericError(response, 'シリーズ概要を取得できませんでした。');
+            return null;
+        }
+        return response.data;
+    }
+
+
     static async fetchSeriesList(order: 'desc' | 'asc' = 'desc', page: number = 1): Promise<ISeriesList | null> {
 
         // API リクエストを実行

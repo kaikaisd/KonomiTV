@@ -62,6 +62,11 @@ const router = createRouter({
             component: () => import('@/views/Videos/WeekKanban.vue'),
         },
         {
+            path: '/series/on-air/:series_id?',
+            name: 'On Air Series',
+            component: () => import('@/views/Series/OnAir.vue'),
+        },
+        {
             path: '/videos/series',
             name: 'Videos Series',
             component: () => import('@/views/Videos/Series.vue'),

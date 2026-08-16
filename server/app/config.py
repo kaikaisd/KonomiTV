@@ -47,6 +47,7 @@ class ClientSettings(BaseModel):
     saved_twitter_hashtags: list[str] = []
     mylist: list[dict[str, Any]] = []
     watched_history: list[dict[str, Any]] = []
+    # video_auto_skip_cm: 同期無効
     # lshaped_screen_crop_enabled: 同期無効
     # lshaped_screen_crop_zoom_level: 同期無効
     # lshaped_screen_crop_x_position: 同期無効

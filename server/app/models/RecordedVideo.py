@@ -34,7 +34,7 @@ class RecordedVideo(TortoiseModel):
     recording_start_time = cast(TortoiseField[datetime | None], fields.DatetimeField(null=True))
     recording_end_time = cast(TortoiseField[datetime | None], fields.DatetimeField(null=True))
     duration = fields.FloatField()
-    container_format = cast(TortoiseField[Literal['MPEG-TS', 'MPEG-4']], fields.CharField(255))
+    container_format = cast(TortoiseField[Literal['MPEG-TS', 'MPEG-4', 'MMT/TLV']], fields.CharField(255))
     video_codec = cast(TortoiseField[Literal['MPEG-2', 'H.264', 'H.265']], fields.CharField(255))
     # プロファイルは他にも多くあるが、現実的に使われそうなものだけを列挙
     video_codec_profile = cast(TortoiseField[Literal['High', 'High 10', 'Main', 'Main 10', 'Baseline', 'Constrained Baseline']], fields.CharField(255))
@@ -44,10 +44,10 @@ class RecordedVideo(TortoiseModel):
     video_resolution_height = fields.IntField()
     has_video_stream_changes = fields.BooleanField(default=False)
     primary_audio_codec = cast(TortoiseField[Literal['AAC-LC']], fields.CharField(255))
-    primary_audio_channel = cast(TortoiseField[Literal['Monaural', 'Stereo', '5.1ch']], fields.CharField(255))
+    primary_audio_channel = cast(TortoiseField[Literal['Monaural', 'Stereo', '3ch', '4ch', '5ch', '5.1ch', '6.1ch', '7.1ch', '10.2ch', '22.2ch']], fields.CharField(255))
     primary_audio_sampling_rate = fields.IntField()
     secondary_audio_codec = cast(TortoiseField[Literal['AAC-LC'] | None], fields.CharField(255, null=True))
-    secondary_audio_channel = cast(TortoiseField[Literal['Monaural', 'Stereo', '5.1ch'] | None], fields.CharField(255, null=True))
+    secondary_audio_channel = cast(TortoiseField[Literal['Monaural', 'Stereo', '3ch', '4ch', '5ch', '5.1ch', '6.1ch', '7.1ch', '10.2ch', '22.2ch'] | None], fields.CharField(255, null=True))
     secondary_audio_sampling_rate = cast(TortoiseField[int | None], fields.IntField(null=True))
     key_frames = cast(TortoiseField[list[KeyFrame]],
         fields.JSONField(default=[], encoder=lambda x: json.dumps(x, ensure_ascii=False)))  # type: ignore

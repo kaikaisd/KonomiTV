@@ -152,7 +152,7 @@ class RecordedVideo(PydanticModel):
     recording_start_time: datetime | None
     recording_end_time: datetime | None
     duration: float
-    container_format: Literal['MPEG-TS', 'MPEG-4']
+    container_format: Literal['MPEG-TS', 'MPEG-4', 'MMT/TLV']
     video_codec: Literal['MPEG-2', 'H.264', 'H.265']
     video_codec_profile: Literal['High', 'High 10', 'Main', 'Main 10', 'Baseline', 'Constrained Baseline']
     video_scan_type: Literal['Interlaced', 'Progressive']
@@ -161,10 +161,10 @@ class RecordedVideo(PydanticModel):
     video_resolution_height: int
     has_video_stream_changes: bool = False
     primary_audio_codec: Literal['AAC-LC']
-    primary_audio_channel: Literal['Monaural', 'Stereo', '5.1ch']
+    primary_audio_channel: Literal['Monaural', 'Stereo', '3ch', '4ch', '5ch', '5.1ch', '6.1ch', '7.1ch', '10.2ch', '22.2ch']
     primary_audio_sampling_rate: int
     secondary_audio_codec: Literal['AAC-LC'] | None = None
-    secondary_audio_channel: Literal['Monaural', 'Stereo', '5.1ch'] | None = None
+    secondary_audio_channel: Literal['Monaural', 'Stereo', '3ch', '4ch', '5ch', '5.1ch', '6.1ch', '7.1ch', '10.2ch', '22.2ch'] | None = None
     secondary_audio_sampling_rate: int | None = None
     cm_sections: list[CMSection] | None = None
     thumbnail_info: ThumbnailInfo | None = None
@@ -279,11 +279,55 @@ class StorageInfo(BaseModel):
 
 # ***** シリーズ *****
 
+class SeriesSummary(PydanticModel):
+    id: int
+    title: str
+    description: str
+    genres: list[Genre]
+    thumbnail_recorded_program_ids: list[int]
+    channel_ids: list[str]
+    official_website_url: str | None
+    bangumi_subject_id: int | None
+    bangumi_subject_name: str | None
+    bangumi_subject_name_cn: str | None
+    bangumi_subject_summary: str | None
+    bangumi_subject_image_url: str | None
+    recorded_programs_count: int
+    created_at: datetime
+    updated_at: datetime
+
+class SeriesSummaryList(BaseModel):
+    total: int
+    series_list: list[SeriesSummary]
+
+class SeriesListPosition(BaseModel):
+    page: int
+
+class OnAirSeries(BaseModel):
+    id: int
+    title: str
+    thumbnail_recorded_program_ids: list[int]
+    channel_ids: list[str]
+    recorded_episodes_count: int
+    missing_episodes_count: int
+    partially_recorded_episodes_count: int
+    weekday: Annotated[int, Field(ge=0, le=6)]
+    broadcast_time: str
+    latest_broadcast_at: datetime
+
+class OnAirSeriesList(BaseModel):
+    series_list: list[OnAirSeries]
+
 class Series(PydanticModel):
     id: int
     title: str
     description: str
     genres: list[Genre]
+    bangumi_subject_id: int | None
+    bangumi_subject_name: str | None
+    bangumi_subject_name_cn: str | None
+    bangumi_subject_summary: str | None
+    bangumi_subject_image_url: str | None
     broadcast_periods: list[SeriesBroadcastPeriod]
     created_at: datetime
     updated_at: datetime
