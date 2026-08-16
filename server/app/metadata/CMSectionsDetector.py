@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import pathlib
 import re
+import shutil
+import tempfile
 import time
 
 import anyio
@@ -12,6 +14,11 @@ import typer
 from app import logging, schemas
 from app.config import LoadConfig
 from app.constants import LIBRARY_PATH
+from app.metadata.CMAnalyzer import (
+    CMAnalyzerRequest,
+    CMContainerFormat,
+    GenericCMAnalyzer,
+)
 from app.models.RecordedVideo import RecordedVideo
 
 
@@ -22,17 +29,29 @@ class CMSectionsDetector:
     .chapter.txt が存在しない場合は自前で CM 区間を検出する
     """
 
-    def __init__(self, file_path: anyio.Path, duration_sec: float) -> None:
+    def __init__(
+        self,
+        file_path: anyio.Path,
+        duration_sec: float,
+        container_format: CMContainerFormat = 'MPEG-TS',
+        service_id: int | None = None,
+    ) -> None:
         """
         録画 TS ファイルに含まれる CM 区間を検出するクラスを初期化する
 
         Args:
             file_path (anyio.Path): 動画ファイルのパス
             duration_sec (float): 動画の再生時間(秒)
+            container_format (CMContainerFormat): 動画ファイルのコンテナ形式
+            service_id (int | None): 録画対象のサービス ID
         """
 
         self.file_path = file_path
         self.duration_sec = duration_sec
+        # FFmpeg / FFprobe の入力 demuxer 選択に使うコンテナ形式
+        self.container_format: CMContainerFormat = container_format
+        # 複数サービスを含む入力から録画対象のストリームを選ぶためのサービス ID
+        self.service_id = service_id
 
 
     async def detectAndSave(self) -> None:
@@ -48,7 +67,15 @@ class CMSectionsDetector:
             ## .chapter.txt は Amatsukaze でエンコードした際に設定次第で自動生成される
             cm_sections = await self.__detectFromChapterFile()
 
-            # チャプターファイルが存在しない場合、FFmpeg の silencedetect を使って自前で解析を試みる
+            # チャプターファイルが存在しない場合、join_logo_scp (with chapter_exe) での解析を試みる
+            ## ロゴと無音・シーンチェンジを併用するため silencedetect より精度が高いが、
+            ## thirdparty/CMAnalysis 以下の専用ランタイム (Linux x64 のみ提供) を必要とする
+            if not cm_sections:
+                cm_sections = await self.__detectWithJLS()
+
+            # 専用ランタイムが未導入の環境 (Windows など) や JLS が失敗した場合は、
+            ## FFmpeg の silencedetect による従来の検出へフォールバックする
+            ## これにより、ランタイムを導入していない環境でも従来通りの精度で CM 区間を検出できる
             if not cm_sections:
                 cm_sections = await self.__detectWithFFmpeg()
 
@@ -83,6 +110,70 @@ class CMSectionsDetector:
 
         except Exception as ex:
             logging.error(f'{self.file_path}: Error saving CM sections to DB:', exc_info=ex)
+
+
+    async def __detectWithJLS(self) -> list[schemas.CMSection] | None:
+        """
+        録画ファイルの CM 区間を join_logo_scp (with chapter_exe) を使って解析する
+
+        thirdparty/CMAnalysis 以下の専用ランタイムを必要とし、未導入の環境では常に None を返す。
+        その場合は呼び出し元が silencedetect による検出へフォールバックする。
+
+        Returns:
+            list[schemas.CMSection] | None: 解析に成功した場合は CM 区間のリストを返す。
+                ランタイム未導入・解析失敗の場合は None を返す。
+        """
+
+        # GenericCMAnalyzer を OS の一時領域で実行する
+        ## 録画フォルダは読み取り専用でマウントされる構成も正式にサポートするため、
+        ## 録画ファイルの隣には一時ディレクトリも解析結果も作成しない
+        ## 映像は FFmpeg で Matroska へ stream-copy し、音声だけ固定 PCM へ正規化してから
+        ## chapter_exe / logoframe / join_logo_scp に渡すため、サーバー側で映像エンコードは行わない
+        work_directory = pathlib.Path(tempfile.mkdtemp(
+            prefix=f'.{self.file_path.stem}.konomitv-cm-',
+        ))
+        try:
+            result = await GenericCMAnalyzer().analyze(CMAnalyzerRequest(
+                recorded_file_path=pathlib.Path(str(self.file_path)),
+                work_directory=work_directory,
+                service_id=self.service_id,
+                hardware_device=self.__resolveHardwareDecodeDevice(),
+                duration_seconds=self.duration_sec,
+                container_format=self.container_format,
+            ))
+            if result.status != 'completed':
+                logging.warning(
+                    f'{self.file_path}: CM analysis with JLS did not complete. '
+                    f'[status: {result.status}] [error_code: {result.error_code}] '
+                    f'[error_message: {result.error_message}]'
+                )
+                return None
+
+            # 解析結果は録画時間を超える区間を含みうるため、録画時間でクランプしてから返す
+            return [schemas.CMSection(
+                start_time=section['start_time'],
+                end_time=min(section['end_time'], float(self.duration_sec)),
+            ) for section in result.sections if section['start_time'] < float(self.duration_sec)]
+        finally:
+            await asyncio.to_thread(shutil.rmtree, work_directory, ignore_errors=True)
+
+
+    @staticmethod
+    def __resolveHardwareDecodeDevice() -> str | None:
+        """
+        CM 解析で優先する Linux VAAPI render device を返す
+
+        Returns:
+            str | None: 利用可能な render device のパス。存在しない場合は None。
+        """
+
+        # コンテナ環境では公開された render node だけが見えるため、番号を固定せず列挙する
+        ## FFMS2 側で初期化に失敗した場合は GenericCMAnalyzer が CPU で一度だけ再試行する
+        dri_directory = pathlib.Path('/dev/dri')
+        if dri_directory.is_dir() is False:
+            return None
+        render_devices = sorted(str(device) for device in dri_directory.glob('renderD*'))
+        return render_devices[0] if render_devices else None
 
 
     async def __detectWithFFmpeg(self) -> list[schemas.CMSection] | None:
@@ -461,6 +552,8 @@ if __name__ == "__main__":
         detector = CMSectionsDetector(
             file_path = anyio.Path(recorded_program.recorded_video.file_path),
             duration_sec = recorded_program.recorded_video.duration,
+            container_format = recorded_program.recorded_video.container_format,
+            service_id = recorded_program.service_id,
         )
 
         # CM 区間を検出
