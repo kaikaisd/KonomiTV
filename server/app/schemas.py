@@ -152,7 +152,7 @@ class RecordedVideo(PydanticModel):
     recording_start_time: datetime | None
     recording_end_time: datetime | None
     duration: float
-    container_format: Literal['MPEG-TS', 'MPEG-4']
+    container_format: Literal['MPEG-TS', 'MPEG-4', 'MMT/TLV']
     video_codec: Literal['MPEG-2', 'H.264', 'H.265']
     video_codec_profile: Literal['High', 'High 10', 'Main', 'Main 10', 'Baseline', 'Constrained Baseline']
     video_scan_type: Literal['Interlaced', 'Progressive']
@@ -161,10 +161,10 @@ class RecordedVideo(PydanticModel):
     video_resolution_height: int
     has_video_stream_changes: bool = False
     primary_audio_codec: Literal['AAC-LC']
-    primary_audio_channel: Literal['Monaural', 'Stereo', '5.1ch']
+    primary_audio_channel: Literal['Monaural', 'Stereo', '3ch', '4ch', '5ch', '5.1ch', '6.1ch', '7.1ch', '10.2ch', '22.2ch']
     primary_audio_sampling_rate: int
     secondary_audio_codec: Literal['AAC-LC'] | None = None
-    secondary_audio_channel: Literal['Monaural', 'Stereo', '5.1ch'] | None = None
+    secondary_audio_channel: Literal['Monaural', 'Stereo', '3ch', '4ch', '5ch', '5.1ch', '6.1ch', '7.1ch', '10.2ch', '22.2ch'] | None = None
     secondary_audio_sampling_rate: int | None = None
     cm_sections: list[CMSection] | None = None
     thumbnail_info: ThumbnailInfo | None = None
