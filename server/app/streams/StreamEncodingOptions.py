@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.config import Config
-from app.constants import QUALITY, QUALITY_TYPES
+from app.constants import LIVE_QUALITY_TYPES, QUALITY, QUALITY_TYPES
 
 
 @dataclass(frozen=True)
@@ -142,4 +142,53 @@ def SplitQualityAndEncodingOptions(quality: str) -> StreamQualityWithOptions | N
     return StreamQualityWithOptions(
         quality = base_quality,
         encoding_options = encoding_options,
+    )
+
+
+@dataclass(frozen=True)
+class LiveStreamQualityWithOptions:
+    """
+    ライブ API パスの品質指定を、ベース画質と追加エンコードオプションへ分解した結果を表す
+
+    Args:
+        quality (LIVE_QUALITY_TYPES): ライブストリームで利用する画質
+        encoding_options (StreamEncodingOptions): ベース画質に追加するエンコードオプション
+    """
+
+    # ライブストリームで利用する画質
+    ## raw-mmts は BS4K の MMTS 透過配信専用の特殊な品質で、QUALITY には存在しない
+    quality: LIVE_QUALITY_TYPES
+
+    # ベース画質に追加するエンコードオプション
+    ## raw-mmts ではエンコードを行わないため、常にデフォルト値のまま使われる
+    encoding_options: StreamEncodingOptions
+
+
+def SplitLiveQualityAndEncodingOptions(quality: str) -> LiveStreamQualityWithOptions | None:
+    """
+    ライブ API パスの品質指定を、ベース画質と追加オプションに分解する
+
+    Args:
+        quality (str): API パスで指定された品質
+
+    Returns:
+        LiveStreamQualityWithOptions | None: 分解結果 (不正な品質指定の場合は None)
+    """
+
+    # BS4K Raw MMTS はエンコードを伴わないライブ専用品質として扱う
+    ## 既存の QUALITY はエンコード引数を組み立てるためのメタデータなので、raw-mmts はそこへ含めない
+    if quality == 'raw-mmts':
+        return LiveStreamQualityWithOptions(
+            quality = 'raw-mmts',
+            encoding_options = StreamEncodingOptions(),
+        )
+
+    # 通常のライブ品質は録画配信と同じ分解ロジックを利用する
+    stream_quality = SplitQualityAndEncodingOptions(quality)
+    if stream_quality is None:
+        return None
+
+    return LiveStreamQualityWithOptions(
+        quality = stream_quality.quality,
+        encoding_options = stream_quality.encoding_options,
     )
