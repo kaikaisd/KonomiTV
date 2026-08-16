@@ -16,6 +16,7 @@ import LiveCommentManager from '@/services/player/managers/LiveCommentManager';
 import LiveDataBroadcastingManager from '@/services/player/managers/LiveDataBroadcastingManager';
 import LiveEventManager from '@/services/player/managers/LiveEventManager';
 import MediaSessionManager from '@/services/player/managers/MediaSessionManager';
+import RecordedCMSkipManager from '@/services/player/managers/RecordedCMSkipManager';
 import PlayerManager from '@/services/player/PlayerManager';
 import Videos, { type IJikkyoComments } from '@/services/Videos';
 import useChannelsStore from '@/stores/ChannelsStore';
@@ -284,6 +285,19 @@ class PlayerController {
                 } else {
                     seek_seconds = player_store.recorded_program.recording_start_margin + 2;
                     console.log(`\u001b[31m[PlayerController] Seeking to ${seek_seconds} seconds. (Recording Start Margin + 2)`);
+                    // 視聴履歴がない初回再生に限り、冒頭が CM 区間ならその終わりまで飛ばして本編から再生を開始する
+                    // 視聴履歴がある場合は、ユーザーが前回中断した位置を常に優先する
+                    if (settings_store.settings.video_auto_skip_cm === true) {
+                        const cm_skip_target = RecordedCMSkipManager.getInitialSkipTarget(
+                            seek_seconds,
+                            player_store.recorded_program.recorded_video.cm_sections,
+                            player_store.recorded_program.recorded_video.duration,
+                        );
+                        if (cm_skip_target !== null) {
+                            seek_seconds = cm_skip_target;
+                            console.log(`\u001b[31m[PlayerController] Seeking to ${seek_seconds} seconds. (Initial CM Auto Skip)`);
+                        }
+                    }
                 }
             } else {
                 // ライブ再生時は使わない値だが、型エラー回避のために 0 を設定
@@ -1149,6 +1163,7 @@ class PlayerController {
         } else {
             // ビデオ視聴時に設定する PlayerManager
             this.player_managers = [
+                new RecordedCMSkipManager(this.player),
                 new CaptureManager(this.player, this.playback_mode),
                 new DocumentPiPManager(this.player, this.playback_mode),
                 new KeyboardShortcutManager(this.player, this.playback_mode),

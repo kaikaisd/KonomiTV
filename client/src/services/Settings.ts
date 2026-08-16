@@ -32,6 +32,7 @@ export interface IClientSettings {
         created_at: number;
         updated_at: number;
     }[];
+    // video_auto_skip_cm: 同期無効
     // lshaped_screen_crop_enabled: 同期無効
     // lshaped_screen_crop_zoom_level: 同期無効
     // lshaped_screen_crop_x_position: 同期無効
