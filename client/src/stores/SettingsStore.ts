@@ -69,7 +69,6 @@ export interface ILocalClientSettings extends IClientSettings {
         created_at: number;
         updated_at: number;
     }[];
-    video_auto_skip_cm: boolean;
     lshaped_screen_crop_enabled: boolean;
     lshaped_screen_crop_zoom_level: number;
     lshaped_screen_crop_x_position: number;
@@ -92,6 +91,7 @@ export interface ILocalClientSettings extends IClientSettings {
     tv_panel_active_tab: 'Program' | 'Channel' | 'Comment' | 'Twitter';
     video_panel_active_tab: 'RecordedProgram' | 'Series' | 'Comment' | 'Twitter';
     video_watched_history_max_count: number;
+    video_auto_skip_cm: boolean;
     tv_streaming_quality: LiveStreamingQuality;
     tv_streaming_quality_cellular: LiveStreamingQuality;
     tv_data_saver_mode: boolean;
@@ -183,9 +183,6 @@ export const ILocalClientSettingsDefault: ILocalClientSettings = {
     // 「ビデオをみる」の視聴履歴
     watched_history: [],
 
-    // 録画再生時に CM 区間を自動でスキップする (Default: オフ) (同期無効)
-    video_auto_skip_cm: false,
-
     // ***** L字画面のクロップ設定 *****
 
     // L字画面のクロップを有効にする (Default: 無効)
@@ -256,6 +253,8 @@ export const ILocalClientSettingsDefault: ILocalClientSettings = {
     // 視聴履歴の保持件数 (Default: 50件)
     // この値を超えると、最も古い視聴履歴から自動的に削除される
     video_watched_history_max_count: 50,
+    // 録画番組の再生時に CM 区間を自動でスキップする (Default: オフ)
+    video_auto_skip_cm: false,
 
     // ***** 設定 → 画質 *****
 
@@ -392,7 +391,6 @@ export const SYNCABLE_SETTINGS_KEYS: (keyof IClientSettings)[] = [
     'saved_twitter_hashtags',
     'mylist',
     'watched_history',
-    // video_auto_skip_cm: 同期無効
     // lshaped_screen_crop_enabled: 同期無効
     // lshaped_screen_crop_zoom_level: 同期無効
     // lshaped_screen_crop_x_position: 同期無効
@@ -415,6 +413,7 @@ export const SYNCABLE_SETTINGS_KEYS: (keyof IClientSettings)[] = [
     'tv_panel_active_tab',
     'video_panel_active_tab',
     'video_watched_history_max_count',
+    'video_auto_skip_cm',
     // tv_streaming_quality: 同期無効
     // tv_streaming_quality_cellular: 同期無効
     // tv_data_saver_mode: 同期無効

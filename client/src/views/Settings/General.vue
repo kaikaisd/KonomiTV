@@ -177,6 +177,16 @@
                     v-model.number="settingsStore.settings.video_watched_history_max_count">
                 </v-text-field>
             </div>
+            <div class="settings__item settings__item--switch">
+                <label class="settings__item-heading" for="video_auto_skip_cm">録画番組の再生時に CM を自動でスキップする</label>
+                <label class="settings__item-label" for="video_auto_skip_cm">
+                    オンにすると、録画番組の再生中に CM 区間を検出したとき、自動的に本編の続きまでスキップします。デフォルトはオフです。<br>
+                    前回の続きから再生する場合は、視聴履歴に保存された再生位置を常に優先します。<br>
+                </label>
+                <v-switch class="settings__item-switch" color="primary" id="video_auto_skip_cm" hide-details
+                    v-model="settingsStore.settings.video_auto_skip_cm">
+                </v-switch>
+            </div>
             <v-divider class="mt-6"></v-divider>
             <div class="settings__item">
                 <div class="settings__item-heading">設定をエクスポート</div>
