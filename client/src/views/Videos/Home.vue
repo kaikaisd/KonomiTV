@@ -63,6 +63,12 @@
                             </h2>
                             <div class="series-section__actions">
                                 <v-btn variant="text" class="series-section__more"
+                                    @click="$router.push('/series/on-air')">
+                                    <span class="text-primary">放送中</span>
+                                    <Icon icon="fluent:chevron-right-12-regular" width="18px"
+                                        class="ml-1 text-text-darken-1" style="margin: 0px -4px;" />
+                                </v-btn>
+                                <v-btn variant="text" class="series-section__more"
                                     @click="$router.push('/videos/series')">
                                     <span class="text-primary">もっと見る</span>
                                     <Icon icon="fluent:chevron-right-12-regular" width="18px"

@@ -314,6 +314,41 @@ class Videos {
      * @param video_id 録画番組の ID
      * @returns 録画番組情報 or 録画番組情報の取得に失敗した場合は null
      */
+    /**
+     * 指定されたシリーズに属する録画番組一覧を取得する
+     * @param series_id シリーズ ID
+     * @param series_broadcast_period_id シリーズ放送期間 ID (指定時は同一放送期間に絞り込む)
+     * @param order ソート順序 ('desc' or 'asc')
+     * @param page ページ番号
+     * @returns 録画番組一覧情報 or 取得に失敗した場合は null
+     */
+    static async fetchVideosBySeries(
+        series_id: number,
+        series_broadcast_period_id: number | null = null,
+        order: 'desc' | 'asc' = 'desc',
+        page: number = 1,
+    ): Promise<IRecordedPrograms | null> {
+
+        // 本家はシリーズ専用のエンドポイントを別途用意しているが、
+        // こちらは録画番組一覧 API のサーバー側絞り込みを使い、同じクエリを再利用している
+        const response = await APIClient.get<IRecordedPrograms>('/videos', {
+            params: {
+                order,
+                page,
+                series_id,
+                series_broadcast_period_id,
+            },
+        });
+
+        if (response.type === 'error') {
+            APIClient.showGenericError(response, 'シリーズの録画番組を取得できませんでした。');
+            return null;
+        }
+
+        return response.data;
+    }
+
+
     static async fetchVideo(video_id: number): Promise<IRecordedProgram | null> {
 
         // API リクエストを実行

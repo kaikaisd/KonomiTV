@@ -362,13 +362,16 @@ async def VideosAPI(
     channel_id: Annotated[str | None, Query(description='チャンネル ID 。指定時は同一チャンネルの録画番組に絞り込む。')] = None,
     genre: Annotated[str | None, Query(description='ジャンル名。指定時は指定されたジャンルを含む録画番組に絞り込む。')] = None,
     video_status: Annotated[Literal['Recording', 'Recorded', 'AnalysisFailed'] | None, Query(alias='status', description='録画ファイルの状態。指定時はその状態の録画番組のみを返す (追っかけ再生一覧では Recording を指定する)。')] = None,
+    series_id: Annotated[int | None, Query(description='シリーズ番組の ID 。指定時は同一シリーズの録画番組に絞り込む。')] = None,
+    series_broadcast_period_id: Annotated[int | None, Query(description='シリーズ放送期間の ID 。指定時は同一放送期間の録画番組に絞り込む。')] = None,
 ):
     """
     すべての録画番組を一度に 30 件ずつ取得する。<br>
     order には "desc" か "asc" か "ids" を指定する。"ids" を指定すると、ids パラメータで指定された順序を維持する。<br>
     page (ページ番号) には 1 以上の整数を指定する。<br>
     ids には録画番組 ID のリストを指定できる。指定時は指定された ID の録画番組のみを返す。<br>
-    channel_id / genre / status を指定すると、さらにチャンネル・ジャンル・録画ファイルの状態で絞り込める。
+    channel_id / genre / status / series_id / series_broadcast_period_id を指定すると、
+    さらにチャンネル・ジャンル・録画ファイルの状態・シリーズ・放送期間で絞り込める。
     """
 
     # 生 SQL クエリを構築
@@ -466,6 +469,13 @@ async def VideosAPI(
         # 録画ファイルの状態は recorded_videos 側が持つため、件数取得側でも同じ JOIN が必要になる
         filter_clauses.append('AND rv.status = ?')
         filter_params.append(video_status)
+    if series_id is not None:
+        # シリーズ ID は recorded_programs 側が持つため、追加の JOIN は不要
+        filter_clauses.append('AND rp.series_id = ?')
+        filter_params.append(series_id)
+    if series_broadcast_period_id is not None:
+        filter_clauses.append('AND rp.series_broadcast_period_id = ?')
+        filter_params.append(series_broadcast_period_id)
     filter_where_clause = '\n        '.join(filter_clauses)
 
     # 件数取得クエリは本来 recorded_programs だけで完結するが、rv.status で絞り込む場合のみ JOIN が必要になる
