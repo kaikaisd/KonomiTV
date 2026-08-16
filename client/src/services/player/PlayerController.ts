@@ -49,6 +49,15 @@ class PlayerController {
     // 視聴履歴の更新間隔 (秒)
     private static readonly WATCHED_HISTORY_UPDATE_INTERVAL = 10;
 
+    // 元ストリームを再エンコードせずに再生する特殊な画質の表示名
+    private static readonly PASSTHROUGH_PRIMARY_QUALITY_NAME = 'TLV パススルー';
+    private static readonly PASSTHROUGH_SECONDARY_QUALITY_NAME = 'TLV パススルー（降雨放送）';
+
+    // BS4K/BS8K の TLV/MMT では HEVC 映像アセットが複数存在する
+    // 通常は自動選択に任せ、降雨放送の映像を明示する場合だけ packet_id を固定する
+    private static readonly BS4K_MMTS_SECONDARY_VIDEO_PACKET_ID = 0xf301;
+    private static readonly BS8K_MMTS_SECONDARY_VIDEO_PACKET_ID = 0xf101;
+
     // DPlayer のインスタンス
     private player: DPlayer | null = null;
 
@@ -383,6 +392,13 @@ class PlayerController {
                 if (this.playback_mode === 'Live') {
                     // ライブストリーミング API のベース URL
                     const streaming_api_base_url = `${Utils.api_base_url}/streams/live/${channels_store.channel.current.display_channel_id}`;
+                    // BS4K チャンネルでは、Mirakurun から decode=0 で受け取った Raw MMTS をそのまま再生できる
+                    const is_bs4k_channel = channels_store.channel.current.type === 'BS4K';
+                    // NHK BSP4K (NID11-SID101) と NHK BS8K (NID11-SID102) のみ降雨放送がある
+                    const has_mmts_secondary_video = channels_store.channel.current.network_id === 11 &&
+                        [101, 102].includes(channels_store.channel.current.service_id);
+                    // NHK BS8K では packet_id が 0xf100 -> 0xf101、それ以外の降雨放送対応 BS4K では 0xf300 -> 0xf301 になる
+                    const is_bs8k_channel = channels_store.channel.current.network_id === 11 && channels_store.channel.current.service_id === 102;
                     // ラジオチャンネルの場合
                     // API が受け付ける画質の値は通常のチャンネルと同じだが (手抜き…)、実際の画質は 48KHz/192kbps で固定される
                     // ラジオチャンネルの場合は、1080p と渡しても 48kHz/192kbps 固定の音声だけの MPEG-TS が配信される
@@ -394,6 +410,27 @@ class PlayerController {
                         });
                     // 通常のチャンネルの場合
                     } else {
+                        // BS4K チャンネルでは TLV パススルーを最優先の選択肢として追加する
+                        // パススルーは設定画面のデフォルト画質とは独立した、ライブ視聴時専用の画質として扱う
+                        if (is_bs4k_channel === true) {
+                            qualities.push({
+                                name: PlayerController.PASSTHROUGH_PRIMARY_QUALITY_NAME,
+                                type: 'tlv',
+                                url: `${streaming_api_base_url}/raw-mmts/mpegts`,
+                            });
+                            if (has_mmts_secondary_video === true) {
+                                qualities.push({
+                                    name: PlayerController.PASSTHROUGH_SECONDARY_QUALITY_NAME,
+                                    type: 'tlv',
+                                    url: `${streaming_api_base_url}/raw-mmts/mpegts`,
+                                    tlv: {
+                                        videoPacketId: is_bs8k_channel === true ?
+                                            PlayerController.BS8K_MMTS_SECONDARY_VIDEO_PACKET_ID :
+                                            PlayerController.BS4K_MMTS_SECONDARY_VIDEO_PACKET_ID,
+                                    },
+                                });
+                            }
+                        }
                         // 画質リストを作成
                         for (const quality_name of LIVE_STREAMING_QUALITIES) {
                             qualities.push({
@@ -405,11 +442,22 @@ class PlayerController {
                         }
                     }
                     // デフォルトの画質
-                    let default_quality: string = this.quality_profile.tv_streaming_quality;
+                    // BS4K チャンネルでは設定画面のデフォルト画質に関わらず TLV パススルーを初期選択にする
+                    let default_quality: string = is_bs4k_channel === true ?
+                        PlayerController.PASSTHROUGH_PRIMARY_QUALITY_NAME : this.quality_profile.tv_streaming_quality;
                     if (options.default_quality !== null) {
                         // PlayerController.init() のオプションでデフォルト画質が指定されている場合は
                         // 画質プロファイルに記載の画質ではなく、指定された（前回再生時の）画質を使ってレジュームする
                         default_quality = options.default_quality;
+                    }
+                    // BS4K から通常チャンネルへ切り替えた際、前回の画質として TLV パススルーが持ち越されることがある
+                    // パススルーは BS4K でしか配信できないため、その場合は設定画面のデフォルト画質へ戻す
+                    if (
+                        (default_quality === PlayerController.PASSTHROUGH_PRIMARY_QUALITY_NAME ||
+                         default_quality === PlayerController.PASSTHROUGH_SECONDARY_QUALITY_NAME) &&
+                        is_bs4k_channel === false
+                    ) {
+                        default_quality = this.quality_profile.tv_streaming_quality;
                     }
                     // ラジオチャンネルのみ常に 48KHz/192kbps に固定する
                     if (channels_store.channel.current.is_radiochannel) {

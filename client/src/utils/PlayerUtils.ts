@@ -33,7 +33,9 @@ type LiveAPIVideoQuality = (
     APIBaseVideoQuality |
     `${APIBaseVideoQuality}-10bit` |
     `${APIBaseVideoQuality}-24fps` |
-    `${APIBaseVideoQuality}-10bit-24fps`
+    `${APIBaseVideoQuality}-10bit-24fps` |
+    // BS4K/BS8K の TLV パススルー専用の画質 (エンコードを伴わないためライブ視聴でのみ利用できる)
+    'raw-mmts'
 );
 
 /**
