@@ -8,7 +8,7 @@ from tortoise.functions import Count
 from tortoise.queryset import Prefetch
 
 from app import logging, schemas
-from app.metadata.TitleParser import TitleParser
+from app.metadata.SeriesIndexer import ParseSeriesTitle
 from app.models.RecordedProgram import RecordedProgram
 from app.models.Series import Series
 from app.models.SeriesBroadcastPeriod import SeriesBroadcastPeriod
@@ -393,7 +393,7 @@ async def SeriesAddProgramAPI(
     """
     指定された録画番組をシリーズに追加する。<br>
     追加された録画番組は手動編集済みフラグが立てられ、自動再割り当ての対象外になる。<br>
-    番組がまだ episode_number や subtitle を持っていない場合、TitleParser で解析して補完する。
+    番組がまだ episode_number や subtitle を持っていない場合、SeriesIndexer で解析して補完する。
     """
 
     # シリーズを取得
@@ -502,13 +502,15 @@ async def SeriesAddProgramAPI(
     program.series_title = series.title
     program.is_series_manually_edited = True
 
-    # episode_number や subtitle が未設定の場合、TitleParser で解析して補完する
+    # episode_number や subtitle が未設定の場合、SeriesIndexer で解析して補完する
+    ## ParseSeriesTitle() は確定的に解析できなかった場合に None を返すため、その場合は補完しない
     if program.episode_number is None or program.subtitle is None:
-        parse_result = TitleParser.parse(program.title)
-        if program.episode_number is None and parse_result.episode_number is not None:
-            program.episode_number = parse_result.episode_number
-        if program.subtitle is None and parse_result.subtitle is not None:
-            program.subtitle = parse_result.subtitle
+        parse_result = ParseSeriesTitle(program.title, program.genres, program.description)
+        if parse_result is not None:
+            if program.episode_number is None and parse_result.episode_number is not None:
+                program.episode_number = parse_result.episode_number
+            if program.subtitle is None and parse_result.subtitle is not None:
+                program.subtitle = parse_result.subtitle
 
     await program.save()
 

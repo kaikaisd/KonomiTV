@@ -24,6 +24,8 @@ class Series(TortoiseModel):
         table: str = 'series'
 
     id = fields.IntField(pk=True)
+    # 表記揺れだけを吸収した完全一致用キー。SeriesIndexer が同一シリーズの判定に使う
+    normalized_title = fields.CharField(512, unique=True)
     title = fields.TextField()
     description = fields.TextField()
     genres = cast(TortoiseField[list[Genre]], fields.JSONField(default=[], encoder=lambda x: json.dumps(x, ensure_ascii=False)))  # type: ignore
