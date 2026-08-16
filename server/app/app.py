@@ -25,6 +25,7 @@ from app.models.Program import Program
 from app.recording.MirakurunRecordingTask import MirakurunRecordingTask
 from app.recording.MirakurunRuleMatchTask import MirakurunRuleMatchTask
 from app.routers import (
+    BangumiRouter,
     BlueskyRouter,
     CapturesRouter,
     ChannelsRouter,
@@ -46,6 +47,7 @@ from app.routers import (
     VideoStreamsRouter,
 )
 from app.streams.LiveStream import LiveStream
+from app.utils.BangumiClient import BangumiClient
 from app.utils.edcb.EDCBTuner import EDCBTuner
 from app.utils.FastAPITaskUtil import repeat_every
 
@@ -83,6 +85,7 @@ app.include_router(CapturesRouter.router)
 app.include_router(EncodingTasksRouter.router)
 app.include_router(DataBroadcastingRouter.router)
 app.include_router(NiconicoRouter.router)
+app.include_router(BangumiRouter.router)
 app.include_router(TwitterRouter.router)
 app.include_router(BlueskyRouter.router)
 app.include_router(UsersRouter.router)
@@ -284,6 +287,14 @@ async def UpdateChannelAndProgram():
 @repeat_every(seconds=0.5 * 60, wait_first=0.5 * 60, logger=logging.logger)
 async def UpdateChannelJikkyoStatus():
     await Channel.updateJikkyoStatus()
+
+# 30分に1回、連携済み Bangumi アカウントの在看・看過一覧から Series の条目情報を更新する
+## 条目検索を Series ごとに行わず、アカウントごとの收藏一覧を候補プールとして一括照合する
+## Bangumi 連携済みのユーザーが一人もいない環境では、外部への通信は一切発生しない
+@app.on_event('startup')
+@repeat_every(seconds=30 * 60, wait_first=10, logger=logging.logger)
+async def UpdateBangumiCollections():
+    await BangumiClient.syncAllLinkedUsers()
 
 # サーバーの終了時に実行する
 cleanup = False

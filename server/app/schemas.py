@@ -224,6 +224,8 @@ class RecordedProgram(PydanticModel):
     series_title: str | None = None  # 番組タイトル解析に成功した場合のみセット
     episode_number: str | None = None  # 番組タイトル解析に成功した場合のみセット
     subtitle: str | None = None  # 番組タイトル解析に成功した場合のみセット
+    bangumi_subject_id: int | None = None  # Bangumi 条目との照合に成功した場合のみセット
+    bangumi_episode_id: int | None = None  # Bangumi エピソードとの照合に成功した場合のみセット
     is_series_manually_edited: bool = False  # 手動でシリーズ割り当てを編集した場合に True
     description: str = '番組概要を取得できませんでした。'
     detail: dict[str, str] = {}
@@ -359,6 +361,10 @@ class User(PydanticModel):
     niconico_user_id: int | None
     niconico_user_name: str | None
     niconico_user_premium: bool | None
+    bangumi_user_id: int | None
+    bangumi_user_name: str | None
+    bangumi_user_nickname: str | None
+    bangumi_user_avatar_url: str | None
     twitter_accounts: list[TwitterAccount]  # 追加カラム
     bluesky_accounts: list[BlueskyAccount]  # 追加カラム
     account_links: list[AccountLink]  # 追加カラム
@@ -903,6 +909,15 @@ class JikkyoComments(BaseModel):
 
 class ThirdpartyAuthURL(BaseModel):
     authorization_url: str
+
+# ***** Bangumi 連携 *****
+
+class BangumiAuthRequest(BaseModel):
+    access_token: Annotated[str, Field(min_length=1, max_length=512)]
+
+class BangumiPlaybackProgressRequest(BaseModel):
+    playback_position: Annotated[float, Field(ge=0)]
+    duration: Annotated[float, Field(gt=0)]
 
 # ***** Twitter 連携 *****
 

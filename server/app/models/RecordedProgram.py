@@ -50,6 +50,10 @@ class RecordedProgram(TortoiseModel):
     # 手動でシリーズ割り当てを編集した場合に True になるフラグ
     # True の場合、__batchAssignSeries() による自動再割り当てをスキップする
     is_series_manually_edited = fields.BooleanField(default=False)
+    # Bangumi との照合に成功した録画だけ、対象条目とエピソードの永続 ID を保持する
+    # 同じローカル Series が分割クールをまたぐ場合があるため、Series ではなく録画番組単位で保存する
+    bangumi_subject_id = cast(TortoiseField[int | None], fields.IntField(null=True))
+    bangumi_episode_id = cast(TortoiseField[int | None], fields.IntField(null=True))
     description = fields.TextField()
     detail = cast(TortoiseField[dict[str, str]], fields.JSONField(default={}, encoder=lambda x: json.dumps(x, ensure_ascii=False)))  # type: ignore
     start_time = fields.DatetimeField()
