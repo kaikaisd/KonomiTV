@@ -1,0 +1,136 @@
+
+name: Verify CM Analysis Runtime
+
+# CM 解析ランタイム (thirdparty/CMAnalysis) のビルドと動作を単体で検証する
+# build_thirdparty.yaml は Windows / Linux amd64 / arm64 のサードパーティー一式を
+# ビルドするため実行時間が長い。CM 解析まわりだけを確認したいときはこちらを使う
+on:
+  # CM 解析のビルド元や解析コードが変わったときに検証する
+  push:
+    branches:
+      - custom-features
+    paths:
+      - '.github/workflows/verify_cm_analysis.yaml'
+      - '.github/workflows/scripts/verify_cm_analysis_runtime.py'
+      - 'docker/thirdparty/build-cm-analysis.sh'
+      - 'docker/thirdparty/manifest.env'
+      - 'docker/thirdparty/patches/**'
+      - 'server/app/metadata/CMAnalyzer.py'
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+
+  # CM 解析ランタイムをビルドし、実際に解析を走らせて動作を確認する
+  verify-cm-analysis:
+    # build_thirdparty.yaml の build-linux と同じランナーを使う
+    ## ここで生成したランタイムがそのまま配布物と同じ条件になるようにするため
+    runs-on: ubuntu-22.04
+    steps:
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # build_thirdparty.yaml の CM 解析ステップと同じ依存パッケージを導入する
+      ## ffmpeg は検証用クリップの合成にのみ使う (ランタイム自体は専用 FFmpeg を内部でビルドする)
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf automake ccache cmake git libbz2-dev libdrm-dev liblzma-dev libtool libva-dev \
+            meson nasm ninja-build patch patchelf pkg-config yasm zlib1g-dev \
+            ffmpeg
+
+      - name: Build CM Analysis Runtime
+        run: |
+          SOURCE_ROOT="${RUNNER_TEMP}/konomitv-cm-analysis-sources" \
+          OUTPUT_ROOT="${GITHUB_WORKSPACE}/thirdparty" \
+            bash docker/thirdparty/build-cm-analysis.sh
+
+      # ビルド成果物が揃っているかを確認する
+      ## libffms2.so はバージョン番号なしのシンボリックリンクで、
+      ## GenericCMAnalyzer はこちらのパスを参照するため個別に確認する
+      - name: Check Build Artifacts
+        run: |
+          cd thirdparty/CMAnalysis
+          test -x chapter_exe
+          test -x ffmsindex
+          test -x logoframe
+          test -x join_logo_scp
+          test -s libffms2.so.3
+          test -e libffms2.so
+          test -e libavisynth.so.10
+          test -s 'JL/JL_標準.txt'
+          python3 -m json.tool Runtime-Manifest.json > /dev/null
+          echo '--- Runtime-Manifest.json ---'
+          cat Runtime-Manifest.json
+
+      # 各実行ファイルが起動できるかを確認する
+      ## コンパイルが通っても rpath や共有ライブラリの配置を誤っていると
+      ## 実行時に初めて失敗するため、動的リンクが解決することをここで確認する
+      - name: Check Dynamic Linking
+        run: |
+          cd thirdparty/CMAnalysis
+          status=0
+          for executable in chapter_exe ffmsindex logoframe join_logo_scp; do
+            # ldd 自体の失敗を OK と誤判定しないよう、終了コードと出力を分けて確認する
+            if ! output="$(ldd "./${executable}" 2>&1)"; then
+              echo "NG   ${executable}: ldd の実行に失敗しました"
+              echo "${output}"
+              status=1
+            elif echo "${output}" | grep -q 'not found'; then
+              echo "NG   ${executable}: 解決できない共有ライブラリがあります"
+              echo "${output}" | grep 'not found'
+              status=1
+            else
+              echo "OK   ${executable}"
+            fi
+          done
+          exit "${status}"
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      # .venv を server/ 直下に作らせ、依存関係をキャッシュ可能にする
+      - name: Configure Poetry
+        working-directory: server
+        run: poetry config virtualenvs.in-project true
+
+      - name: Restore Cached Dependencies
+        uses: actions/cache@v4
+        with:
+          path: server/.venv
+          key: ${{ runner.os }}-poetry-${{ hashFiles('server/poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-
+
+      # CMAnalyzer を動かすために、サーバー側の依存関係を導入する
+      ## サードパーティーライブラリ (FFmpeg など) は CM 解析ランタイム側で用意するため取得しない
+      - name: Install Server Dependencies
+        working-directory: server
+        run: poetry install --no-interaction
+
+      # 合成した検証用クリップに対して実際に CM 解析を実行する
+      ## chapter_exe / logoframe / join_logo_scp / ffmsindex が起動し、
+      ## 解析が完走することまでを確認する
+      - name: Run CM Analysis Smoke Test
+        working-directory: server
+        run: |
+          poetry run python ../.github/workflows/scripts/verify_cm_analysis_runtime.py \
+            "${GITHUB_WORKSPACE}/thirdparty/CMAnalysis" \
+            --fixture-script ../docker/thirdparty/generate-cm-smoke-fixture.py
+
+      # スモークテストが失敗した場合でもビルド結果を取得できるようにする
+      ## ここで得たランタイムは server/thirdparty/CMAnalysis へ配置すればそのまま利用できる
+      - name: Upload CM Analysis Runtime as Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CMAnalysis-linux-x64
+          path: thirdparty/CMAnalysis
+          if-no-files-found: warn
