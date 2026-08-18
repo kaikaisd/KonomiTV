@@ -6,9 +6,13 @@ name: Verify CM Analysis Runtime
 # ビルドするため実行時間が長い。CM 解析まわりだけを確認したいときはこちらを使う
 on:
   # CM 解析のビルド元や解析コードが変わったときに検証する
+  ## custom-features ブランチと作業ブランチへの push で実行する
+  ## lint_and_test.yaml と同様、作業ブランチでもプルリクエストを作る前に
+  ## ランタイムのビルドと動作確認の結果を得られるようにしている
   push:
     branches:
       - custom-features
+      - 'claude/**'
     paths:
       - '.github/workflows/verify_cm_analysis.yaml'
       - '.github/workflows/scripts/verify_cm_analysis_runtime.py'
