@@ -3,11 +3,13 @@
 ## プロジェクト固有の注意事項
 
 - yarn や poetry はそれぞれ `client/` と `server/` のディレクトリに移動した状態で実行してください。ルートディレクトリにはパッケージ管理系のファイルは一切配置していません。
-- バージョンを上げる際は、ユーザーの確認を得た後、以下の4ファイルのバージョンを揃えて更新する:
+- バージョンを上げる際は、ユーザーの確認を得た後、以下の5ファイルのバージョンを揃えて更新する:
   - `server/app/constants.py` の `VERSION` (例: `'0.13.7.mirakurun'`)
   - `client/package.json` の `"version"` (例: `"0.13.7.mirakurun"`)
   - `server/pyproject.toml` の `version` (例: `"0.13.7+mirakurun"`)
   - `installer/KonomiTV-Installer.py` の `TARGET_VERSION` (例: `'0.13.7.mirakurun'`)
+  - `installer/pyproject.toml` の `version` (例: `"0.13.7+mirakurun"`)
+  - pyproject.toml の2ファイルのみ、PEP 440 に従い `+mirakurun` 形式になる点に注意する
   - バージョンアップのコミット後、必ず同じバージョン番号で git tag を打ち、タグも push する:
     ```
     git tag v0.13.7.mirakurun
