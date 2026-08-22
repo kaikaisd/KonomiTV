@@ -8,7 +8,7 @@ import axios, { AxiosError, AxiosRequestConfig, AxiosResponse, AxiosResponseHead
 
 import Message from '@/message';
 import useUserStore from '@/stores/UserStore';
-import Utils from '@/utils';
+import Utils, { dayjs } from '@/utils';
 
 
 /** API リクエスト成功時のレスポンスを表すインターフェイス */
@@ -268,7 +268,13 @@ class APIClient {
                 } else {
                     // HTTP リクエスト自体は成功したが、API からエラーレスポンスが返ってきた場合
                     if (error_response.status === 502) {
-                        Message.error(`${template}\n現在サーバーを起動/再起動しています。もうしばらくお待ちください。(HTTP Error 502)`);
+                        // Cloudflare Access (Zerotrust) 経由のアクセスでは、CF Access セッションが切れると
+                        // オリジンへの API リクエストが 502 として返ってくることがある。
+                        // この場合はサーバー再起動ではなく再認証が必要なため、CF Access のセッション状態を確認した上で、
+                        // セッション切れが確認できたら自動的に Zerotrust ログインへリダイレクトする。
+                        // それ以外 (通常のサーバー再起動など) は従来通りエラーメッセージを表示する。
+                        // fire-and-forget で実行する (showGenericError 自体は同期メソッドのため await しない)。
+                        void APIClient.handleBadGateway(template);
                     } else if (error_response.data.detail !== undefined) {
                         Message.error(`${template}(HTTP Error ${error_response.status} / ${error_response.data.detail})`);
                     } else {
@@ -278,6 +284,52 @@ class APIClient {
                 return;
             }
         }
+    }
+
+
+    /**
+     * HTTP 502 (Bad Gateway) 発生時の処理
+     * Cloudflare Access (Zerotrust) のセッション切れが原因の 502 であれば自動的に再認証フロー (Zerotrust ログイン) へ
+     * 誘導し、それ以外 (通常のサーバー再起動など) は従来通りエラーメッセージを表示する。
+     * @param template エラーメッセージのテンプレート（「アカウント情報を取得できませんでした。」など)
+     */
+    private static async handleBadGateway(template: string): Promise<void> {
+        // CF Access のセッション状態を /cdn-cgi/access/get-identity の HTTP ステータスで判別する:
+        //   非200   → CF Access は存在するがセッション切れ: 自動的に再認証 (Zerotrust ログイン) へ誘導する
+        //   200     → CF Access 認証済み: セッションは有効なので通常のサーバー再起動とみなす
+        //   例外発生 → CF Access が導入されていない環境 (LAN 直接アクセス等): 通常のサーバー再起動とみなす
+        // /cdn-cgi/access/get-identity は Cloudflare のエッジが応答するため、オリジンが 502 でも到達できる。
+        try {
+            const response = await fetch('/cdn-cgi/access/get-identity', { cache: 'no-store' });
+            if (!response.ok) {
+                // 何らかの理由で再認証後も 502 が続く場合にリロードが無限ループするのを防ぐため、
+                // 直近で自動リダイレクトを行った場合は再実行せず、通常のエラーメッセージ表示にフォールバックする。
+                const LAST_REAUTH_KEY = 'cf_access_last_auto_reauth';
+                const REAUTH_COOLDOWN_MS = 30 * 1000;  // 30 秒間は再リダイレクトを抑制する
+                const last_reauth = Number(sessionStorage.getItem(LAST_REAUTH_KEY) ?? '0');
+                if (dayjs().valueOf() - last_reauth < REAUTH_COOLDOWN_MS) {
+                    Message.error(`${template}\n現在サーバーを起動/再起動しています。もうしばらくお待ちください。(HTTP Error 502)`);
+                    return;
+                }
+                sessionStorage.setItem(LAST_REAUTH_KEY, String(dayjs().valueOf()));
+                // Service Worker がキャッシュした index.html を返すと CF Access の 302 リダイレクトが発生しないため、
+                // SW を一旦登録解除してキャッシュをバイパスし、ブラウザが直接ネットワークにアクセスするようにしてから
+                // 再ロードする。再ロード後、CF Access の認証フロー (Zerotrust ログイン) が確実に通る。
+                Message.warning('Cloudflare Access のセッションが切れています。再認証のためログインページへ移動します...');
+                if ('serviceWorker' in navigator) {
+                    const registration = await navigator.serviceWorker.getRegistration();
+                    if (registration) {
+                        await registration.unregister();
+                    }
+                }
+                window.location.reload();
+                return;
+            }
+        } catch {
+            // ネットワークエラーまたは CF Access が導入されていない環境: 通常のサーバー再起動とみなしフォールバックする
+        }
+        // CF Access 認証済み or CF Access なしの場合は、通常のサーバー再起動などとみなしてエラーメッセージを表示する
+        Message.error(`${template}\n現在サーバーを起動/再起動しています。もうしばらくお待ちください。(HTTP Error 502)`);
     }
 }
 
