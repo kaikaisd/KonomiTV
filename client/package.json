@@ -3,6 +3,7 @@
     "version": "0.14.2.mirakurun",
     "private": true,
     "scripts": {
+        "preinstall": "node scripts/ensure-git-deps.cjs",
         "akebi": "run-script-os",
         "akebi:windows": "..\\server\\thirdparty\\Akebi\\akebi-https-server.exe --listen-address 0.0.0.0:7001 --proxy-pass-url http://127.0.0.77:7011/ --keyless-server-url https://akebi.konomi.tv/ > nul",
         "akebi:nix": "../server/thirdparty/Akebi/akebi-https-server.elf --listen-address 0.0.0.0:7001 --proxy-pass-url http://127.0.0.77:7011/ --keyless-server-url https://akebi.konomi.tv/ > /dev/null",

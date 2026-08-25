@@ -3,6 +3,7 @@
 ## プロジェクト固有の注意事項
 
 - yarn や poetry はそれぞれ `client/` と `server/` のディレクトリに移動した状態で実行してください。ルートディレクトリにはパッケージ管理系のファイルは一切配置していません。
+- `client/` の `yarn install` では `preinstall` フックで `scripts/ensure-git-deps.cjs` が自動実行される。これは yarn v1 が git 依存を「パッケージ名 @ version」でキャッシュする仕様上、同じ version を名乗る別リポジトリ/別コミットのフォーク (例: `makeding/DPlayer#4f5f7892` と `tsukumijima/DPlayer#v1.32.8` はどちらも 1.32.8) がキャッシュ衝突し、誤った内容がインストールされる問題を防ぐためのもの。`package.json` の `github:` 依存とキャッシュの解決先を突き合わせ、食い違うキャッシュだけを削除して再取得させる (正しい/空のキャッシュでは何もしない)。**この仕組みを削除すると TLV 再生の破損などが再発しうるため、安易に消さないこと。**
 - バージョンを上げる際は、ユーザーの確認を得た後、以下の5ファイルのバージョンを揃えて更新する:
   - `server/app/constants.py` の `VERSION` (例: `'0.13.7.mirakurun'`)
   - `client/package.json` の `"version"` (例: `"0.13.7.mirakurun"`)
