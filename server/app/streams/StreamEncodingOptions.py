@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.config import Config
-from app.constants import LIVE_QUALITY_TYPES, QUALITY, QUALITY_TYPES
+from app.constants import (
+    LIVE_QUALITY_TYPES,
+    LIVE_STREAMING_QUALITY_TYPES,
+    QUALITY,
+    QUALITY_TYPES,
+)
 
 
 @dataclass(frozen=True)
@@ -88,16 +93,17 @@ class StreamEncodingOptions:
 @dataclass(frozen=True)
 class StreamQualityWithOptions:
     """
-    API パスの品質指定を、ベース画質と追加エンコードオプションへ分解した結果を表す
+   ストリーミング配信 API の品質指定を、ベース画質と追加エンコードオプションへ分解した結果を表す
 
     Args:
-        quality (QUALITY_TYPES): ベース画質
+        quality (LIVE_STREAMING_QUALITY_TYPES): ベース画質
         encoding_options (StreamEncodingOptions): ベース画質に追加するエンコードオプション
     """
 
     # QUALITY に定義されているベース画質
     ## API パスには 720p-hevc-10bit-24fps のようにオプション付きの品質が渡されるが、エンコード処理にはこの値だけを渡す
-    quality: QUALITY_TYPES
+    ## ライブ時のみ "original" を受け付ける (録画再生時は VideoEncodingTask 自体を迂回するので設定できないが、型を分けるのが面倒なのでこれで)
+    quality: LIVE_STREAMING_QUALITY_TYPES
 
     # ベース画質に追加するエンコードオプション
     ## HEVC 10bit や 24fps モードは、ベース画質から分けてストリーム ID やエンコード引数へ渡す
@@ -114,6 +120,14 @@ def SplitQualityAndEncodingOptions(quality: str) -> StreamQualityWithOptions | N
     Returns:
         StreamQualityWithOptions | None: 分解結果 (不正な品質指定の場合は None)
     """
+
+    # オリジナル画質が指定された場合は確実にライブ配信からなので特別扱い
+    if quality == 'original':
+        return StreamQualityWithOptions(
+            quality = 'original',
+            # エンコーダーを通さないためエンコードオプションは空
+            encoding_options = StreamEncodingOptions(),
+        )
 
     # -10bit / -24fps は buildSuffix() と同じ順序でのみ受け付ける
     ## 末尾から剥がすことで、1080p-60fps-hevc のようにベース画質自体が -hevc を含むケースを安全に扱う

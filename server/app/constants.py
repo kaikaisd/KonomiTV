@@ -224,10 +224,16 @@ QUALITY_TYPES = Literal[
     '240p-hevc',
 ]
 
-# ライブストリーミング専用の品質の種類 (型定義)
-## raw-mmts は BS4K の MMTS を Mirakurun から decode=0 で受け取り、そのままブラウザへ配信する特殊な品質。
-## エンコードを行わないため QUALITY には含めず、ライブストリーム側だけで扱う。
-LIVE_QUALITY_TYPES = QUALITY_TYPES | Literal['raw-mmts']
+# ライブストリーミングで指定できる品質 (型定義)
+## original はブラウザ側の mpeg2toh264 で変換・再生する前提で、放送波の MPEG-2 TS を再エンコードせずに直接出力するストリームを表す特別な値
+## 録画再生と共通の分解ロジック (StreamQualityWithOptions) でも用いるため、raw-mmts はここには含めない
+LIVE_STREAMING_QUALITY_TYPES = Literal['original'] | QUALITY_TYPES
+
+# ライブ視聴専用の品質の種類 (型定義)
+## raw-mmts は BS4K の MMTS を Mirakurun から decode=0 で受け取り、そのままブラウザへ配信する特殊な品質 (TLV パススルー)。
+## エンコードを行わないため QUALITY には含めず、ライブ視聴・MMT/TLV 録画のパススルーだけで扱う。
+## ライブ側では original / 通常画質に raw-mmts を加えたものが受け付ける品質になる。
+LIVE_QUALITY_TYPES = Literal['raw-mmts'] | LIVE_STREAMING_QUALITY_TYPES
 
 # 映像と音声の品質
 QUALITY: dict[QUALITY_TYPES, Quality] = {

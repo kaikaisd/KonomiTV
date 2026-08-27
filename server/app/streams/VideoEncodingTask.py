@@ -230,6 +230,16 @@ class VideoEncodingTask:
         ## QSVEncC・NVEncC・rkmppenc は HW デコーダーを利用する
         else:
             options.append('--avhw')
+        ## 入力途中の解像度変更に備えて、デコーダー/入力サーフェスの最大確保解像度を指定する
+        ## --output-res は出力側の固定解像度であり、こちらは入力側の上限なので併用する
+        ## 代表解像度が 4K 相当なら 3840×2160、それ以外は HD 上限の 1920×1080 とする
+        ## (ファイル中の最大解像度は持っていないため、HD/4K の天井値で確保する)
+        recorded_video = self.video_stream.recorded_program.recorded_video
+        if (recorded_video.video_resolution_width >= 3840 or
+            recorded_video.video_resolution_height >= 2160):
+            options.append('--adapt-resolution 3840x2160')
+        else:
+            options.append('--adapt-resolution 1920x1080')
 
         # ストリームのマッピング
         ## 音声切り替えのため、主音声・副音声両方をエンコード後の TS に含む
@@ -397,22 +407,6 @@ class VideoEncodingTask:
         # エンコーダーの種類を取得
         CONFIG = Config()
         ENCODER_TYPE = CONFIG.general.encoder
-
-        # 映像 PID や映像ストリーム構成が途中で変わる録画（マルチ編成開始/終了での解像度変更時など）に関して、HWEncC 系エンコーダーは
-        # --avhw だと録画マージン区間 -> 本編での解像度切り替えに対応できずクラッシュし、--avsw の場合はエラーこそ出ないがデコードがめちゃくちゃになる問題がある
-        # このため苦肉の策として、メタデータ解析時に映像構成がイレギュラーな TS だと事前に検出した上で、それらの録画ファイルの再生時エンコーダーを FFmpeg に固定する
-        ## FFmpeg (ソフトウェアデコード/エンコード) + tsreadex (映像 PID 固定化) の構成であれば、解像度変化のある TS も問題なくエンコードできるっぽい
-        recorded_video = self.video_stream.recorded_program.recorded_video
-        if (
-            recorded_video.container_format == 'MPEG-TS' and
-            recorded_video.has_video_stream_changes is True and
-            ENCODER_TYPE != 'FFmpeg'
-        ):
-            logging.warning(
-                f'{self.video_stream.log_prefix} FFmpeg will be used because video stream changes were detected. '
-                f'[configured_encoder: {ENCODER_TYPE}]'
-            )
-            ENCODER_TYPE = 'FFmpeg'
 
         # 新しいエンコードタスクを起動させた時点で既にエンコード済みのセグメントは使えなくなるので、すべてリセットする
         for segment in self.video_stream.segments:
@@ -811,23 +805,23 @@ class VideoEncodingTask:
                     ## 視聴対象の録画番組が放送されたチャンネルのサービス ID があれば指定する
                     '-n', tsreadex_service_id,
                     # 主音声ストリームが常に存在する状態にする
-                    ## ストリームが存在しない場合、無音の AAC ストリームが出力される
-                    ## 音声がモノラルであればステレオにする
-                    ## デュアルモノを2つのモノラル音声に分離し、右チャンネルを副音声として扱う
+                    ## +1: ストリームが存在しない場合、無音の AAC ストリームが出力される
+                    ## +4: 音声がモノラルであればステレオにする
+                    ## +8: デュアルモノを2つのモノラル音声に分離し、右チャンネルを副音声として扱う
                     '-a', '13',
                     # 副音声ストリームが常に存在する状態にする
-                    ## ストリームが存在しない場合、無音の AAC ストリームが出力される
-                    ## 音声がモノラルであればステレオにする
-                    '-b', '7',
+                    ## +1: ストリームが存在しない場合、無音の AAC ストリームが出力される
+                    ## +4: 音声がモノラルであればステレオにする
+                    '-b', '5',
                     # 字幕ストリームが常に存在する状態にする
-                    ## ストリームが存在しない場合、PMT の項目が補われて出力される
-                    ## 実際の字幕データが現れない場合に5秒ごとに非表示の適当なデータを挿入する
+                    ## +1: ストリームが存在しない場合、PMT の項目が補われて出力される
+                    ## +4: 実際の字幕データが現れない場合に5秒ごとに非表示の適当なデータを挿入する
                     '-c', '5',
                     # 文字スーパーストリームが常に存在する状態にする
-                    ## ストリームが存在しない場合、PMT の項目が補われて出力される
+                    ## +1: ストリームが存在しない場合、PMT の項目が補われて出力される
                     '-u', '1',
                     # 字幕と文字スーパーを aribb24.js が解釈できる ID3 timed-metadata に変換する
-                    ## +4: FFmpeg のバグを打ち消すため、変換後のストリームに規格外の5バイトのデータを追加する
+                    ## +1: 字幕と文字スーパーを ID3 timed-metadata に変換する
                     ## +8: FFmpeg のエラーを防ぐため、変換後のストリームの PTS が単調増加となるように調整する
                     ## 以前は Linux 版 HWEncC が FFmpeg 4.4 系の共有ライブラリに依存していたため +4 を付与していたが、
                     ## 現在の Linux 版 HWEncC は FFmpeg 8 系を静的リンクした最新版へ更新したため不要になった

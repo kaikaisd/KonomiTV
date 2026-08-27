@@ -1914,10 +1914,10 @@ aribb24.js@^1.11.0, aribb24.js@~1.11.5:
   resolved "https://registry.yarnpkg.com/aribb24.js/-/aribb24.js-1.11.5.tgz#fb4dfc5bc4b10625c0d92987bd4e833d3faa532e"
   integrity sha512-WEprzYs18FgAIxX885X7YLrgIsjmAecodm6tjmUUckX0kp2Lj9uSdOo+1vxgI7dtEEhhPSB5ocJhDIv560CRFg==
 
-aribb62.js@^0.1.11:
-  version "0.1.11"
-  resolved "https://registry.yarnpkg.com/aribb62.js/-/aribb62.js-0.1.11.tgz#342b4c1b7cec30aac1a07a4c52f1157fa67c4261"
-  integrity sha512-+pYLk/AKCOqvqnQDJzARMLXggGQ23nIZkPlutwXaIkQLai2qdkYlA/mjJCAxEs8X4CdI20QSYITyy9MIb5zkzg==
+aribb62.js@^0.2.0:
+  version "0.2.0"
+  resolved "https://registry.yarnpkg.com/aribb62.js/-/aribb62.js-0.2.0.tgz#fb9c6c627632e9468208dc3953befbd8f1221e7a"
+  integrity sha512-v/dm9e6Kv+HAk7g4ye8UM/7IzJwSnT865v71Va7ouOdJH1rpgFRJRYtx9iZqwFwbZfzORUjnit2OxBCsiw9muQ==
 
 array-buffer-byte-length@^1.0.1, array-buffer-byte-length@^1.0.2:
   version "1.0.2"
@@ -2675,15 +2675,15 @@ dotenv@^16.3.1:
   resolved "https://registry.yarnpkg.com/dotenv/-/dotenv-16.6.1.tgz#773f0e69527a8315c7285d5ee73c4459d20a8020"
   integrity sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==
 
-"dplayer@github:makeding/DPlayer#4f5f7892aaf57f6e1274d41c7b35204736c63e7a":
-  version "1.32.8"
-  resolved "https://codeload.github.com/makeding/DPlayer/tar.gz/4f5f7892aaf57f6e1274d41c7b35204736c63e7a"
+"dplayer@github:kaikaisd/DPlayer#5cffd0c4599f4d20dfc44434855a9cb5101a02cd":
+  version "1.33.1"
+  resolved "https://codeload.github.com/kaikaisd/DPlayer/tar.gz/5cffd0c4599f4d20dfc44434855a9cb5101a02cd"
   dependencies:
     aribb24.js "~1.11.5"
-    aribb62.js "^0.1.11"
+    aribb62.js "^0.2.0"
     axios "^1.7.2"
     balloon-css "^1.2.0"
-    tlvdemux "^0.1.8"
+    tlvdemux "^0.2.4"
 
 dunder-proto@^1.0.0, dunder-proto@^1.0.1:
   version "1.0.1"
@@ -4369,6 +4369,10 @@ mitt@^3.0.1:
   resolved "https://registry.yarnpkg.com/mitt/-/mitt-3.0.1.tgz#ea36cf0cc30403601ae074c8f77b7092cdab36d1"
   integrity sha512-vKivATfr97l2/QBCYAkXYDbrIWPM2IIKEl7YPhjCvKlG3kE2gm+uBo6nEXK3M5/Ffh/FLpKExzOQ3JJoJGFKBw==
 
+"mpeg2toh264@github:tsukumijima/mpeg2toh264#5717fa4d263e6c5b3f27b08d93114326c3b79cef":
+  version "0.0.1"
+  resolved "https://codeload.github.com/tsukumijima/mpeg2toh264/tar.gz/5717fa4d263e6c5b3f27b08d93114326c3b79cef"
+
 mpegts.js@^1.7.3, "mpegts.js@github:tsukumijima/mpegts.js#c69a71c809b6e0a53f7101455333f8b3d98460d0":
   version "1.8.0"
   resolved "https://codeload.github.com/tsukumijima/mpegts.js/tar.gz/c69a71c809b6e0a53f7101455333f8b3d98460d0"
@@ -5683,10 +5687,10 @@ tinyglobby@^0.2.10, tinyglobby@^0.2.13:
     fdir "^6.5.0"
     picomatch "^4.0.4"
 
-tlvdemux@^0.1.8:
-  version "0.1.9"
-  resolved "https://registry.yarnpkg.com/tlvdemux/-/tlvdemux-0.1.9.tgz#1cddc4426bf781aca1a778e46207837b77fa6d1a"
-  integrity sha512-CIfYL3ZayIw7Hk2V47NTkhsl4izT79XP+HQizMHmH41s6l6Kpx0mfMPZQn/M/rgRX6k1ueNW5RiuqgVGpmNL4Q==
+tlvdemux@^0.2.4:
+  version "0.2.4"
+  resolved "https://registry.yarnpkg.com/tlvdemux/-/tlvdemux-0.2.4.tgz#1f7bf11ffd1a95446f44bc8b654ce81724497aa0"
+  integrity sha512-qzjCmX7jeLNe8H+DCZUJFojBRwrmUGsWQM/yIRzPUZbSUA0JKz+12lQTMSq7HzAqieZhAIiYsMIwq7z+gt5uog==
 
 to-regex-range@^5.0.1:
   version "5.0.1"
