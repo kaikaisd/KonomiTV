@@ -44,6 +44,11 @@ RUN yarn install --frozen-lockfile
 # クライアントのソースコードをコピー
 COPY ./client/ /code/client/
 
+# 放送局ロゴ画像をコピー
+## logoGenerator.js (yarn build の最初に実行される) が ../server/static/logos/ のロゴ画像から
+## チャンネルロゴのスプライト画像を生成するため、クライアントビルド前にロゴ画像を配置しておく
+COPY ./server/static/logos/ /code/server/static/logos/
+
 # クライアントをビルド
 # /code/client/dist/ に成果物が作成される
 RUN yarn build
