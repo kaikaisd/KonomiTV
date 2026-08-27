@@ -1,6 +1,6 @@
 {
     "name": "KonomiTV",
-    "version": "0.14.2.mirakurun",
+    "version": "0.14.3.mirakurun",
     "private": true,
     "scripts": {
         "preinstall": "node scripts/ensure-git-deps.cjs",
