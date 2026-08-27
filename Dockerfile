@@ -31,9 +31,12 @@ RUN tar xvf thirdparty-linux.tar.xz
 
 FROM node:20.16.0 AS client-builder
 
-# 依存パッケージリスト (package.json/yarn.lock) だけをコピー
+# 依存パッケージリスト (package.json/yarn.lock) と preinstall フックのスクリプトをコピー
+## preinstall フック (scripts/ensure-git-deps.cjs) は yarn install より前に実行されるため、
+## package.json/yarn.lock と一緒に scripts/ もこの時点でコピーしておかないと install が失敗する
 WORKDIR /code/client/
 COPY ./client/package.json ./client/yarn.lock /code/client/
+COPY ./client/scripts/ /code/client/scripts/
 
 # 依存パッケージを yarn でインストール
 RUN yarn install --frozen-lockfile
