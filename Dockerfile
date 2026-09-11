@@ -18,11 +18,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends aria2 ca-certif
 ## サードパーティーライブラリは変更が少ないので、先にダウンロード処理を実行してビルドキャッシュを効かせる
 WORKDIR /
 ## リリース版用
-RUN aria2c -x10 https://github.com/tsukumijima/KonomiTV/releases/download/v0.14.1/thirdparty-linux.tar.xz
-RUN tar xvf thirdparty-linux.tar.xz
+## NOTE: v0.14.1 の thirdparty バンドルは QSVEncC 8.25 以前で、可変解像度対応 (--adapt-resolution) 非対応のため使えない。
+##       EncodingTask が全エンコードで --adapt-resolution を付与する関係で、これを使うと QSVEncC 録画再生が全滅する。
+# RUN aria2c -x10 https://github.com/tsukumijima/KonomiTV/releases/download/v0.14.1/thirdparty-linux.tar.xz
+# RUN tar xvf thirdparty-linux.tar.xz
 ## 開発版 (0.xx.x-dev) 用
-# RUN aria2c -x10 https://nightly.link/tsukumijima/KonomiTV/actions/runs/27093421017/thirdparty-linux.tar.xz.zip
-# RUN unzip thirdparty-linux.tar.xz.zip && tar xvf thirdparty-linux.tar.xz
+## QSVEncC 8.26 / NVEncC 9.31 / VCEEncC 9.12 を含む master ビルド (run 32152427422 / 2026-08-18)。
+## いずれも --adapt-resolution 対応版なので、EncodingTask の可変解像度対応が正しく動作する。
+RUN aria2c -x10 https://nightly.link/tsukumijima/KonomiTV/actions/runs/32152427422/thirdparty-linux.tar.xz.zip
+RUN unzip thirdparty-linux.tar.xz.zip && tar xvf thirdparty-linux.tar.xz
 
 # --------------------------------------------------------------------------------------------------------------
 # クライアントをビルドするステージ
