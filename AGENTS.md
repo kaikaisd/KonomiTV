@@ -141,10 +141,14 @@ Windows では Windows サービス、Linux では pm2 サービスとして動�
     - `VideoStreamsRouter.py`: 録画番組のストリーミング配信関連 API
     - `ReservationsRouter.py`: 録画予約関連 API（EDCB 連携 + Mirakurun バックエンド向け CRUD）
     - `ReservationConditionsRouter.py`: キーワード自動予約ルール CRUD API（Mirakurun バックエンド専用）
+    - `RecordingPresetsRouter.py`: 録画設定プリセット一覧 API
     - `DataBroadcastingRouter.py`: データ放送のインターネット接続機能向け API
     - `CapturesRouter.py`: キャプチャ画像管理 API
+    - `EncodingTasksRouter.py`: 録画番組のバッチエンコードタスク管理 API（タスクの追加・更新・進捗イベント・エンコード済みファイルのダウンロード）
     - `TwitterRouter.py`: Twitter 連携 API
+    - `BlueskyRouter.py`: Bluesky 連携 API（アカウント連携・投稿・リポスト・いいね）
     - `NiconicoRouter.py`: ニコニコ実況連携 API
+    - `BangumiRouter.py`: Bangumi (bgm.tv) 連携 API（個人アクセストークン認証・録画視聴進捗の送信・連携解除）
     - `UsersRouter.py`: ユーザーアカウント管理 API
     - `SettingsRouter.py`: クライアント・サーバー設定管理 API（Telegram テスト通知 `POST /notification/test`・テンプレート検証 `POST /notification/validate-template` を含む）
     - `MaintenanceRouter.py`: サーバーメンテナンス用 API
@@ -156,16 +160,27 @@ Windows では Windows サービス、Linux では pm2 サービスとして動�
     - `Program.py`: 放送番組情報を管理するモデル（番組メタデータ、EPG 番組情報、タイトル、番組詳細、ジャンルなど）
     - `RecordedProgram.py`: 録画済み番組のメタデータを管理するモデル（EPG 録画番組情報、録画開始/終了時刻など）
     - `RecordedVideo.py`: 録画済み番組の動画ファイル情報を管理するモデル（ファイルパス、映像/音声コーデック、ファイルサイズなど）
+    - `EncodingTask.py`: 録画 TS ファイルを MP4 へバッチトランスコードするエンコードタスクを管理するモデル
     - `Series.py`: 番組シリーズ情報を管理するモデル（シリーズ名、シリーズ ID など）
     - `SeriesBroadcastPeriod.py`: 番組シリーズの放送期間情報を管理するモデル
+    - `BangumiEpisodeCompletion.py`: Bangumi への視聴完了同期をユーザーとエピソード単位で保持するモデル（重播や複数タブからの重複同期を防ぐ）
     - `TwitterAccount.py`: Twitter アカウント連携情報を管理するモデル（トークン、認証情報など）
+    - `BlueskyAccount.py`: Bluesky アカウント連携情報を管理するモデル（DID・ハンドル・暗号化済みセッションなど）
+    - `AccountLink.py`: Twitter アカウントと Bluesky アカウントの紐付けを管理するモデル（同時投稿の送信先設定に用いる）
+    - `CaptureFolder.py`: キャプチャ画像を整理するための仮想フォルダを管理するモデル（実際のファイル移動は行わない）
+    - `CaptureBookmark.py`: キャプチャフォルダとキャプチャ画像の紐付けを管理する中間テーブル
     - `User.py`: ユーザーアカウント情報を管理するモデル（認証情報、権限など）
+    - `DeviceAuth.py`: 文字入力が困難な端末を KonomiTV アカウントへ紐付けるための、一時的なデバイスペアリング要求を管理するモデル（OAuth 2.0 Device Authorization Grant 相当）
   - `migrations/`: Tortoise ORM のマイグレーションツール: Aerich 向けの DB マイグレーション定義 (Aerich で自動生成されたコードを修正したもの)
   - `streams/`: テレビ放送のライブストリーミング・録画番組のオンデマンドストリーミング関連の実装
     - `LiveEncodingTask.py`: ライブストリーミング用のエンコード・ストリーミングタスクを管理
     - `VideoEncodingTask.py`: 録画番組用のエンコード・ストリーミングタスクを管理
+    - `StreamEncodingOptions.py`: ライブ/録画ストリームでベース画質に追加するエンコードオプション（10bit・24fps など）の定義と分解処理
     - `LiveStream.py`: 放送波のライブストリーミングの状態管理
     - `VideoStream.py`: 録画番組のオンデマンドストリーミングの状態管理
+    - `VideoSegmentPlanner.py`: 仮想 HLS セグメント長と `segment_map` の変換規則をまとめるユーティリティ
+    - `VideoSourceTimeline.py`: 同一話の複数録画ファイルから構成した仮想番組時間軸を表すクラス
+    - `RecordingPlaybackTracker.py`: 録画中ファイルの追っかけ再生に用いる、ファイル単位の共有トラッカー（録画の伸長に合わせて再生可能範囲を更新する）
     - `LivePSIDataArchiver.py`: 放送波から PSI/SI データを抽出・アーカイブする機能の実装
   - `recording/`: Mirakurun バックエンド専用の録画エンジン実装
     - `MirakurunRecordingTask.py`: 録画予約スケジューラー・Mirakurun ストリーム受信・TS ファイル書き込み・Telegram 通知送信を管理するバックグラウンドタスク
@@ -174,17 +189,28 @@ Windows では Windows サービス、Linux では pm2 サービスとして動�
     - `RecordedScanTask.py`: 録画フォルダの監視とメタデータの DB への同期を行うタスク
     - `MetadataAnalyzer.py`: 録画ファイルのメタデータを解析するクラス
     - `TSInfoAnalyzer.py`: 録画 TS ファイルや録画データ関連ファイルに含まれる番組情報を解析するクラス
+    - `MMTSInfoAnalyzer.py`: BS4K/BS8K の MMT/TLV 録画ファイル (.mmts) から MMT-SI を解析し、録画メタデータを取得するクラス
+    - `SeriesIndexer.py`: EPG の番組タイトルを確定的に解析し、録画番組を作品タイトル単位で Series へ関連付けるクラス
     - `ThumbnailGenerator.py`: プレイヤーのシークバー用タイル画像と、候補区間内で最も良い1枚の代表サムネイルを生成するクラス
     - `CMSectionsDetector.py`: 録画 TS ファイルに含まれる CM 区間を検出するクラス
+    - `CMAnalyzer.py`: chapter_exe / logoframe / join_logo_scp を用いて CM 区間を解析するクラス（`thirdparty/CMAnalysis` の専用ランタイムを必要とし、未導入の環境では `CMSectionsDetector` が silencedetect による検出へフォールバックする）
   - `utils/`: ユーティリティ関数とヘルパー
     - `edcb/`: EDCB 連携用の API クライアント実装
     - `JikkyoClient.py`: ニコニコ実況・NX-Jikkyo 連携用の API クライアント実装
+    - `BangumiClient.py`: 連携ユーザーの Bangumi 收藏一覧を候補プールとして、ローカルの Series・録画番組を Bangumi の条目・エピソードへ照合するクライアント実装
     - `TwitterGraphQLAPI.py`: Twitter API 連携用にリバースエンジニアリングして開発した API クライアント実装
+    - `TwitterScrapeBrowser.py`: Twitter 連携で用いるヘッドレスブラウザのセットアップや低レベル操作を隠蔽するクラス
+    - `BlueskyAPI.py`: Bluesky の AT Protocol API を扱うクライアント実装
     - `TSInformation.py`: 日本のテレビ放送で用いられている MPEG2-TS から情報を取得する際に役立つユーティリティ群
+    - `TSKeyFrameSeeker.py`: TS 録画ファイルの再生開始位置を、プレイリスト上の相対時刻からキーフレーム単位で解決するユーティリティ
+    - `MP4KeyFrameParser.py`: MP4 コンテナの moov 内テーブルからキーフレーム情報を読み取るユーティリティ
     - `OAuthCallbackResponse.py`: OAuth 認証のコールバック時にブラウザに情報を渡すために返す特殊なレスポンス
     - `DriveIOLimiter.py`: ドライブごとの同時実行数を制限するためのユーティリティクラス
     - `ProcessLimiter.py`: プロセスごとの同時実行数を制限するためのユーティリティクラス
+    - `RecordingStatusProvider.py`: 録画バックエンドが把握している録画中ファイルパスの一覧を提供するクラス（追っかけ再生の対象判定に用いる）
     - `TelegramNotifier.py`: Telegram Bot 経由の録画完了通知送信クラス（サムネイル添付・HTML テンプレート展開・テスト通知対応）
+    - `LogRotation.py`: JST 基準で日次ローテーションを行うログハンドラー
+    - `FastAPITaskUtil.py`: FastAPI で定期実行タスクを定義するための `repeat_every` デコレーター（fastapi-utils から移植）
   - `app.py`: FastAPI アプリケーションやルーターの初期化・バックグラウンドタスクの定義
   - `config.py`: サーバー設定 (`config.yaml`) のロードとバリデーション・`ConfigFileWatcher` による config.yaml ホットリロード（`_ServerSettingsRecording` で録画終了マージン・ファイル名テンプレートを管理）
   - `constants.py`: サーバー全体で用いられるグローバル定数

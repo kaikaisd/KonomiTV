@@ -3,6 +3,7 @@
         v-bind="rootBindings"
         :class="{
             'recorded-program--recording': program.recorded_video.status === 'Recording',
+            'recorded-program--recording-stale': isStaleRecording,
             'recorded-program--failed': program.recorded_video.status === 'AnalysisFailed',
             'recorded-program--card': cardView,
             'recorded-program--offline': forOffline,
@@ -417,7 +418,7 @@ import EncodingTasks, { IEncodingTask } from '@/services/EncodingTasks';
 import OfflineVideos, { type IOfflineDownloadJob, type IOfflineVideo } from '@/services/OfflineVideos';
 import SeriesService from '@/services/Series';
 import Settings, { IEncodingProfile } from '@/services/Settings';
-import Videos, { type IRecordedProgram, type IRecordedVideoAvailableChannel } from '@/services/Videos';
+import Videos, { isChasePlaybackProgram, type IRecordedProgram, type IRecordedVideoAvailableChannel } from '@/services/Videos';
 import useSettingsStore from '@/stores/SettingsStore';
 import useUserStore from '@/stores/UserStore';
 import Utils, { PlayerUtils, ProgramUtils } from '@/utils';
@@ -680,6 +681,17 @@ const isOfflineInteractionBlocked = computed(() => {
     return isOfflineJobActive.value === true || isOfflineJobFailed.value === true;
 });
 
+// 追っかけ再生できる録画中番組かどうか
+// 録画中の番組は、録画ファイルの伸長に合わせて HLS プレイリストが更新される追っかけ再生で視聴できる
+// オフライン保存ページではサーバーへ接続できないため、追っかけ再生の対象外とする
+const isChasePlayable = computed(() => props.forOffline !== true && isChasePlaybackProgram(props.program));
+
+// 録画終了時刻を大きく過ぎても status が Recording のまま残っている録画番組かどうか
+// 録画プロセスの異常終了などで status が更新されないまま残った録画で、追っかけ再生の対象にならないため無効表示にする
+const isStaleRecording = computed(() => {
+    return props.program.recorded_video.status === 'Recording' && isChasePlayable.value === false;
+});
+
 // オフライン保存ページのルート要素 (保存ジョブ実行中は div へ切り替える)
 const rootTag = computed(() => isOfflineInteractionBlocked.value === true ? 'div' : 'router-link');
 
@@ -687,7 +699,8 @@ const rootTag = computed(() => isOfflineInteractionBlocked.value === true ? 'div
 const rootBindings = computed(() => {
     if (rootTag.value !== 'router-link') return {};
     return {
-        to: props.program.recorded_video.status === 'Recorded'
+        // 録画済みの番組に加え、追っかけ再生できる録画中の番組も視聴ページへ遷移させる
+        to: (props.program.recorded_video.status === 'Recorded' || isChasePlayable.value === true)
             ? (props.forOffline ? `/videos/watch/${props.program.id}?source=offline` : `/videos/watch/${props.program.id}`)
             : { path: '' },
     };
@@ -1504,7 +1517,9 @@ const removeFromSeries = async () => {
         }
     }
 
-    &--recording, &--failed, &--offline-blocked {
+    // 追っかけ再生できる録画中番組はクリックして視聴できるため、ここには含めない
+    // 録画中であることは、サムネイル上の「録画中」バッジで示している
+    &--recording-stale, &--failed, &--offline-blocked {
         pointer-events: none;
         &:hover {
             background: rgb(var(--v-theme-background-lighten-1));
