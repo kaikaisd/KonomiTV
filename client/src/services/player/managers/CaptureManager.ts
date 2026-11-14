@@ -328,8 +328,15 @@ class CaptureManager implements PlayerManager {
             return;
         }
 
-        // まだ映像の表示準備が終わっていない (映像の幅/高さが 0 のまま)
-        if (this.player.video.videoWidth === 0 && this.player.video.videoHeight === 0) {
+        // まだ映像の表示準備が終わっていない
+        // mpeg2toh264 でソフトウェアデコードしている間は、video 要素は音声のみを再生していて映像の幅/高さが常に 0 になる
+        // この場合は映像を描画している YADIF Deinterlacer が動作を開始しているかで判定する
+        // それ以外の場合は、video 要素の映像の幅/高さが 0 のままかで判定する
+        const mpeg2toh264_player = this.player.type === 'mpeg2toh264' ? this.player.plugins.mpeg2toh264 : undefined;
+        const is_video_ready = mpeg2toh264_player?.softwareDecoding === true ?
+            (mpeg2toh264_player.deinterlacer instanceof Deinterlacer && mpeg2toh264_player.deinterlacer.running === true) :
+            (this.player.video.videoWidth !== 0 || this.player.video.videoHeight !== 0);
+        if (is_video_ready === false) {
             this.player.notice('読み込み中はキャプチャできません。', undefined, undefined, '#FF6F6A');
             return;
         }

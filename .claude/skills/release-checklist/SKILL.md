@@ -51,9 +51,11 @@ KonomiTV の新バージョンをリリースする前に、ユーザーと一�
     - FFmpeg は BtbN/FFmpeg-Builds のリリースを確認する
   - 差分がある場合は「現在 X.XX、最新 X.XX」のように比較結果をユーザーに報告し、更新するか判断を仰ぐ
   - 更新が必要な場合は、ユーザーが `build_thirdparty.yaml` のバージョンを更新してコミットする
-- [ ] **開発版 Dockerfile の thirdparty URL が最新の CI ランの成果物を指しているか**
-  - `Dockerfile` 内の `nightly.link` URL の `actions/runs/XXXXXXX` が、最新の build_thirdparty ワークフロー実行の run ID と一致しているか確認する
-  - サードパーティライブラリのバージョンを更新した場合、CI が完了した後にこの URL も更新する必要がある
+- [ ] **開発版 Dockerfile が参照する thirdparty-latest リリースが最新のビルドになっているか**
+  - 開発版の `Dockerfile` は、build_thirdparty ワークフローが本リポジトリの GitHub Release `thirdparty-latest` に公開したビルドを `THIRDPARTY_URL` で参照する (run ID を書き換える必要はない)
+  - `thirdparty-latest` リリースの説明文に記録されたコミット・各エンコーダーのバージョンが、現在の `build_thirdparty.yaml` と一致しているか確認する
+  - サードパーティライブラリのバージョンを更新した場合、`build_thirdparty.yaml` の変更を custom-features に push すると自動でビルド・公開される (完了まで待つ)
+  - 以前のように nightly.link で特定の run の Artifact を参照してはいけない。Artifact は最長 90 日で削除され、期限切れで Docker ビルドが "Resource not found" で失敗する
 
 ### Phase 3: Dockerfile のリリース準備
 
@@ -67,9 +69,7 @@ KonomiTV の新バージョンをリリースする前に、ユーザーと一�
   RUN aria2c -x10 https://github.com/tsukumijima/KonomiTV/releases/download/v(前回バージョン)/thirdparty-linux.tar.xz
   RUN tar xvf thirdparty-linux.tar.xz
 
-  # 「開発版用」の行をコメントアウトする
-  # RUN aria2c -x10 https://nightly.link/tsukumijima/KonomiTV/actions/runs/XXXXXXX/thirdparty-linux.tar.xz.zip
-  # RUN unzip thirdparty-linux.tar.xz.zip && tar xvf thirdparty-linux.tar.xz
+  # 「開発版用」の ARG THIRDPARTY_URL / ARG THIRDPARTY_FALLBACK_URL と、それに続く RUN 2 行をコメントアウトする
   ```
 
 ### Phase 4: リリースノートの下書き生成
@@ -104,7 +104,7 @@ KonomiTV の新バージョンをリリースする前に、ユーザーと一�
   - `Publish Docker Image` ワークフローの実行結果を確認する
 - [ ] **Dockerfile を「開発版用」に戻す**
   - Phase 3 の逆の変更を行う
-  - thirdparty の nightly.link URL は最新リリースの build_thirdparty ワークフローの run ID に更新する
+  - 開発版用の thirdparty は `thirdparty-latest` リリースを参照するため、URL の更新は不要
   - `Update: [Dockerfile] 開発版用サードパーティーライブラリを更新` としてコミット & push する
 - [ ] **リリースの告知**
   - ユーザーに確認:「Twitter (X) での告知は行いますか？」

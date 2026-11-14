@@ -3,8 +3,8 @@ import assert from 'assert';
 
 import DPlayer, { DPlayerType } from 'dplayer';
 import Hls from 'hls.js';
-import { Mpeg2TsPlayer } from 'mpeg2toh264/player';
-import { Deinterlacer, probeDecoder, supportsDeinterlace, type DecoderProbe } from 'mpeg2toh264/yadif';
+import { Mpeg2TsPlayer, supportsPassthrough } from 'mpeg2toh264/player';
+import { Deinterlacer, supportsDeinterlace } from 'mpeg2toh264/yadif';
 import mpegts from 'mpegts.js';
 import { watch } from 'vue';
 
@@ -29,27 +29,14 @@ import useUserStore from '@/stores/UserStore';
 import Utils, { dayjs, PlayerUtils } from '@/utils';
 
 
-// デバイスのデコーダーが自動でのデインタレースに対応しているかを取得
+// WebGL2 で YADIF Deinterlacer を構築できるかを取得
+// mpeg2toh264 は MPEG-2 映像を Web Worker 内の WebAssembly でソフトウェアデコードし、Deinterlacer の Canvas にだけ描画する
+// このため Deinterlacer を構築できない端末では、ブラウザ自身が MPEG-2 をデコードできる場合のパススルー再生しか手段がない
 // この判定はデバイス単位で不変のため、初回ロード時に1回だけ実行して共有する
-const is_yadif_supported = supportsDeinterlace();  // WebGL2 で Deinterlacer を構築できるかを取得
-let decoder_deinterlace_probe_result: DecoderProbe | null = null;
-const decoder_deinterlace_probe_promise: Promise<DecoderProbe | null> = (async () => {
-    // WebGL2 を利用できない端末では YADIF Deinterlacer を構築できないため、デコーダーの出力をそのまま表示する
-    if (is_yadif_supported === false) {
-        console.debug('[PlayerController] Decoder deinterlace probe:', {
-            deinterlaces: null,
-            survives: null,
-            tookMs: 0,
-            error: 'WebGL2 Deinterlacer is not supported.',
-        });
-        return null;
-    }
-
-    // 実際にデコーダーを通した結果の画素を図り、自動デインタレースに対応しているデバイスかを特定する
-    decoder_deinterlace_probe_result = await probeDecoder();
-    console.debug('[PlayerController] Decoder deinterlace probe:', decoder_deinterlace_probe_result);
-    return decoder_deinterlace_probe_result;
-})();
+const is_yadif_supported = supportsDeinterlace();
+// ブラウザ自身が MPEG-2 映像をデコードできるか (Apple 製プラットフォームの Safari など) を取得
+// Deinterlacer を構築できない場合や、ソフトウェアデコードできないストリームの場合のフォールバックにのみ使われる
+const is_mpeg2_passthrough_supported = supportsPassthrough();
 
 
 /**
@@ -287,11 +274,10 @@ class PlayerController {
         // ブラウザが MSE in Worker での H.265 / HEVC 再生に対応しているかどうか
         const is_hevc_video_supported_in_worker = await mpegts.supportWorkerForMSEH265Playback();
 
-        // WebGL2 がサポートされていて、かつデバイスが自動デインタレースに対応していない場合は、
-        // mpeg2toh264 で再生する際に YADIF Deinterlacer を有効にする
-        // 万が一 decoder_deinterlace_probe_result がまだ取得できていない場合は、安全側に倒すために false が入る
-        const is_yadif_enabled = is_yadif_supported === true &&
-            decoder_deinterlace_probe_result?.deinterlaces !== true;
+        // mpeg2toh264 は映像をソフトウェアデコードし、YADIF Deinterlacer の Canvas を通してのみ表示する
+        // デバイスのハードウェアデコーダーは使われないため、デコーダーが自動でデインタレースするかどうかに関わらず、
+        // WebGL2 で Deinterlacer を構築できる端末では常に Deinterlacer を有効にする
+        const is_yadif_enabled = is_yadif_supported === true;
 
         // 文字スーパーの表示設定
         // ライブ視聴とビデオ視聴で設定キーが異なる
@@ -801,23 +787,26 @@ class PlayerController {
                 mpeg2toh264: {
                     // 対応ブラウザでは変換処理と MediaSource を Web Worker 内へまとめ、メインスレッドの描画負荷から分離する
                     mediaSource: 'auto',
-                    // MPEG-2 を直接デコードできるブラウザ環境…もあるらしいがデインタレースができるかは不明なため、パススルーモードは使わない
-                    passthrough: false,
+                    // 通常はソフトウェアデコードで再生し、パススルー再生 (ブラウザ自身による MPEG-2 デコード) は使わない
+                    // パススルー再生ではデインタレースされるかが不明なため、Deinterlacer を構築できない端末や、
+                    // AAC 音声を含まずソフトウェアデコードできないストリームでのフォールバックとしてのみ利用する
+                    // ここで false を指定すると、そうした環境ではフォールバックできずに再生エラーとなる
+                    passthrough: is_mpeg2_passthrough_supported,
                     // ライブ放送では選択中のサービスを明示する (tsreadex がすでに選択してくれているが念のため)
                     // 録画再生では、DB に記録済みのサービス ID がある場合だけ指定する
                     serviceId: this.playback_mode === 'Live' ?
                         channels_store.channel.current.service_id : player_store.recorded_program.service_id ?? undefined,
-                    // デコーダーが自動でデインタレースしてくれない端末だけ、YADIF Deinterlacer を通した Canvas を実際の表示映像として利用する
-                    // TODO: Document Picture-in-Picture API に対応した環境では問題ないが、Picture-in-Picture API のみに対応した環境、
-                    // かつデコーダーが自動でデインタレースしてくれない環境では、Picture-in-Picture するとインタレ未解除の映像が
-                    // ミニプレイヤーで表示されると思われるが、技術的に改善が難しいのと、ミニプレイヤーならジャギ気にならんやろと言うことで当面仕様とする
+                    // ソフトウェアデコードした映像は YADIF Deinterlacer の Canvas にのみ描画され、video 要素は音声のみを再生する
+                    // TODO: Document Picture-in-Picture API に対応した環境では Canvas ごとミニプレイヤーへ移動するため問題ないが、
+                    // Picture-in-Picture API のみに対応した環境では video 要素に映像トラックがないため、
+                    // オリジナル画質で Picture-in-Picture しても映像が表示されないと思われる。技術的に改善が難しいため当面仕様とする
                     deinterlace: is_yadif_enabled,
                     deinterlacer: is_yadif_enabled === true ? (video: HTMLVideoElement) => new Deinterlacer(video, {
                         // 常に MPEG-2 60i 映像を 60fps でぬるぬる再生する
                         doubleRate: true,
                         // 24fps モードがオンの場合のみ、実写区間では 60fps でぬるぬる描画しつつ、
                         // 映画・アニメなど 24fps で制作された映像を自動検出し、余分なフレームを間引いて本来の動きに近づける
-                        autoFilm: this.playback_mode === 'Live' ? this.quality_profile.tv_24fps_mode : this.quality_profile.video_24fps_mode,
+                        film: this.playback_mode === 'Live' ? this.quality_profile.tv_24fps_mode : this.quality_profile.video_24fps_mode,
                     }) : undefined,
                 },
                 // mpegts.js
@@ -1022,17 +1011,6 @@ class PlayerController {
             // これを呼ぶと LocalStorage の dplayer-loop まで書き換わり、通常の録画番組の再生でも
             // ユーザーが設定したループ再生が無効のままになってしまうため
         }
-
-        // 万が一再生開始後にデバイスが自動デインタレースに対応していることが判明した場合は、再起動せず Deinterlacer の Canvas だけを停止する
-        // この設定値も更新しておくことで、同じ DPlayer 内で後からオリジナル画質へ切り替えた場合にも判定結果を適用する
-        void decoder_deinterlace_probe_promise.then((result) => {
-            if (result?.deinterlaces !== true || this.player === null) return;
-            this.player.options.pluginOptions!.mpeg2toh264!.deinterlace = false;
-            this.player.options.pluginOptions!.mpeg2toh264!.deinterlacer = undefined;
-            if (this.player.type === 'mpeg2toh264' && this.player.plugins.mpeg2toh264) {
-                this.player.plugins.mpeg2toh264.deinterlace = false;
-            }
-        });
 
         // この時点で DPlayer のコンテナ要素に dplayer-mobile クラスが付与されている場合、
         // DPlayer は音量コントロールがないスマホ向けの UI になっている
@@ -1528,11 +1506,18 @@ class PlayerController {
                     this.player.video.oncanplay = on_canplay;
                     this.player.video.oncanplaythrough = on_canplay;
 
-                    // 変換処理が失敗した場合は DPlayer のエラー表示を残し、プレイヤーを停止状態にする
-                    mpeg2toh264_player.addEventListener('error', () => {
+                    // 再生処理が失敗した場合は DPlayer のエラー表示を残し、プレイヤーを停止状態にする
+                    // ソフトウェアデコードもパススルー再生もできない環境では、ここに到達する前に読み込みが失敗していることがあるため、
+                    // その場合はエラーイベントを待たずに即座に停止させる
+                    const on_error = () => {
                         window.clearTimeout(startup_timeout_id);
                         this.player?.pause();
-                    }, {once: true});
+                    };
+                    if (mpeg2toh264_player.state === 'error') {
+                        on_error();
+                    } else {
+                        mpeg2toh264_player.addEventListener('error', on_error, {once: true});
+                    }
                     this.player.play();
 
                     // オリジナル画質では mpeg2toh264 自身がバッファを適切に管理してくれるため、mpegts.js 専用の同期処理はスキップする
@@ -1863,10 +1848,16 @@ class PlayerController {
                 });
 
                 // mpeg2toh264 の再生中になんらかの再生エラーが発生した場合は、エラー状態を明示するために自動で HLS 画質へ切り替わらないようにする
+                // ソフトウェアデコードもパススルー再生もできない環境では、ここに到達する前に読み込みが失敗していることがあるため、
+                // その場合はエラーイベントを待たずに即座に停止させる
                 if (this.player.type === 'mpeg2toh264' && this.player.plugins.mpeg2toh264) {
-                    this.player.plugins.mpeg2toh264.addEventListener('error', () => {
-                        this.player?.pause();
-                    }, {once: true});
+                    if (this.player.plugins.mpeg2toh264.state === 'error') {
+                        this.player.pause();
+                    } else {
+                        this.player.plugins.mpeg2toh264.addEventListener('error', () => {
+                            this.player?.pause();
+                        }, {once: true});
+                    }
                 }
             }
         };

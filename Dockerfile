@@ -23,10 +23,27 @@ WORKDIR /
 # RUN aria2c -x10 https://github.com/tsukumijima/KonomiTV/releases/download/v0.14.1/thirdparty-linux.tar.xz
 # RUN tar xvf thirdparty-linux.tar.xz
 ## 開発版 (0.xx.x-dev) 用
-## QSVEncC 8.26 / NVEncC 9.31 / VCEEncC 9.12 を含む master ビルド (run 32152427422 / 2026-08-18)。
-## いずれも --adapt-resolution 対応版なので、EncodingTask の可変解像度対応が正しく動作する。
-RUN aria2c -x10 https://nightly.link/tsukumijima/KonomiTV/actions/runs/32152427422/thirdparty-linux.tar.xz.zip
-RUN unzip thirdparty-linux.tar.xz.zip && tar xvf thirdparty-linux.tar.xz
+## 本フォークの build_thirdparty ワークフローが GitHub Release (thirdparty-latest) に公開しているビルドを使う。
+## QSVEncC 8.26 / NVEncC 9.31 / VCEEncC 9.12 (いずれも --adapt-resolution 対応版) に加え、
+## 本フォーク独自の CM 解析ランタイム (thirdparty/CMAnalysis) も含まれる。
+## NOTE: 以前は nightly.link 経由で上流の特定の Actions run の Artifact を参照していたが、Artifact は最長 90 日で削除されるため、
+##       期限切れになると "Resource not found" でビルドが失敗していた。Release の添付ファイルには保持期限がない。
+## NOTE: thirdparty-latest はワークフローの実行ごとに上書きされるが、この RUN はビルドキャッシュが効くため、
+##       新しいビルドを取り込むには `docker compose build --no-cache` でビルドし直す必要がある。
+## 別のビルドを使いたい場合は --build-arg THIRDPARTY_URL=... で URL を差し替えられる。
+ARG THIRDPARTY_URL=https://github.com/kaikaisd/KonomiTV/releases/download/thirdparty-latest/thirdparty-linux.tar.xz
+## Release がまだ公開されていない場合に限り、上流 master の最新ビルドの Artifact (nightly.link) にフォールバックする
+## こちらは CM 解析ランタイムを含まず、上流が 90 日以上ビルドしていなければ期限切れで取得できない点に注意
+ARG THIRDPARTY_FALLBACK_URL=https://nightly.link/tsukumijima/KonomiTV/workflows/build_thirdparty.yaml/master/thirdparty-linux.tar.xz.zip
+RUN if aria2c -x10 -o thirdparty-linux.tar.xz "${THIRDPARTY_URL}"; then \
+        echo "Downloaded thirdparty from ${THIRDPARTY_URL}"; \
+    else \
+        echo "Failed to download ${THIRDPARTY_URL}; falling back to ${THIRDPARTY_FALLBACK_URL}" && \
+        rm -f thirdparty-linux.tar.xz thirdparty-linux.tar.xz.aria2 && \
+        aria2c -x10 -o thirdparty-linux.tar.xz.zip "${THIRDPARTY_FALLBACK_URL}" && \
+        unzip thirdparty-linux.tar.xz.zip; \
+    fi
+RUN tar xvf thirdparty-linux.tar.xz
 
 # --------------------------------------------------------------------------------------------------------------
 # クライアントをビルドするステージ
