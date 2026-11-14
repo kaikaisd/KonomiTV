@@ -2,10 +2,12 @@
 name: Build Thirdparty Libraries
 
 # .github/workflows/build_thirdparty.yaml (このファイル) に変更があったとき or 他のワークフローからの呼び出し or 手動実行
+## 本フォークの独自機能は custom-features ブランチで管理しているため、custom-features への push でもビルドする
 on:
   push:
     branches:
       - master
+      - custom-features
     paths:
       - '.github/workflows/build_thirdparty.yaml'
       - '.github/workflows/scripts/build_intel_media_stack_standalone.sh'
@@ -523,3 +525,59 @@ jobs:
         with:
           name: thirdparty-linux${{ matrix.artifact_suffix }}.tar.xz
           path: thirdparty-linux${{ matrix.artifact_suffix }}.tar.xz
+
+  # ビルドしたサードパーティーライブラリを、このリポジトリの GitHub Release (thirdparty-latest) に公開する
+  ## Actions の Artifact は最長 90 日で削除されるため、nightly.link 経由で特定の run の Artifact を参照し続けると、
+  ## 期限切れでいずれ必ず "Resource not found" になり Docker イメージのビルドが失敗する
+  ## Release の添付ファイルには保持期限がないため、Dockerfile などからは常にこちらを参照する
+  ## 同じタグのリリースを毎回上書きする (Release 自体はプレリリース扱いにし、KonomiTV 本体の最新リリース表示を邪魔しない)
+  publish-release:
+    # 一部のビルドが失敗しても、成功したビルドの成果物だけは公開する (失敗した成果物は前回のものがそのまま残る)
+    # 機能ブランチから手動実行したビルドで公開版を上書きしないよう、master / custom-features でのみ公開する
+    if: ${{ !cancelled() && (github.ref == 'refs/heads/custom-features' || github.ref == 'refs/heads/master') }}
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: thirdparty-latest
+    steps:
+
+      # 各ビルドジョブがアップロードした Artifact をまとめてダウンロードする
+      ## merge-multiple により、Artifact ごとのディレクトリを作らず thirdparty-*/ 直下へ展開する
+      - name: Download Thirdparty Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: thirdparty-*
+          path: thirdparty-artifacts
+          merge-multiple: true
+
+      # リリースがまだなければ作成し、ビルド元のコミットとバージョンを説明文に記録する
+      - name: Create or Update Release
+        run: |
+          NOTES="Thirdparty libraries built by the Build Thirdparty Libraries workflow.
+
+          - Commit: ${{ github.sha }} (${{ github.ref_name }})
+          - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - QSVEncC ${{ env.QSVENCC_VERSION }} / NVEncC ${{ env.NVENCC_VERSION }} / VCEEncC ${{ env.VCEENCC_VERSION }} / rkmppenc ${{ env.RKMPPENC_VERSION }}
+          - FFmpeg ${{ env.FFMPEG_VERSION }} / Python ${{ env.PYTHON_VERSION }}"
+          if gh release view "${RELEASE_TAG}" > /dev/null 2>&1; then
+            gh release edit "${RELEASE_TAG}" --title "Thirdparty Libraries (latest build)" --notes "${NOTES}" --prerelease
+          else
+            gh release create "${RELEASE_TAG}" --target "${{ github.sha }}" \
+              --title "Thirdparty Libraries (latest build)" --notes "${NOTES}" --prerelease
+          fi
+
+      # 成功したビルドの成果物だけを、同名の既存ファイルを置き換えてアップロードする
+      - name: Upload Thirdparty Libraries to Release
+        run: |
+          ls -la thirdparty-artifacts
+          shopt -s nullglob
+          files=(thirdparty-artifacts/thirdparty-*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No thirdparty artifacts were built; nothing to publish."
+            exit 1
+          fi
+          gh release upload "${RELEASE_TAG}" "${files[@]}" --clobber
